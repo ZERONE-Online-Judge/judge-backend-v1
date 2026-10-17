@@ -653,6 +653,21 @@ class VerificationRunRow(Base):
     __table_args__ = (Index("idx_verification_run_asset_created", "problem_id", "asset_id", "created_at"),)
 
 
+class VerificationExecutionRow(Base):
+    __tablename__ = "verification_executions"
+    summary: Mapped[dict] = mapped_column(JSON, default=dict)
+    submission_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    problem_id: Mapped[str] = mapped_column(String(36), index=True)
+    testcases: Mapped[list] = mapped_column(JSON, default=list)
+    results: Mapped[list] = mapped_column(JSON, default=list)
+    storage_keys: Mapped[list] = mapped_column(JSON, default=list)
+    testcase_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    full_suite_complete: Mapped[bool] = mapped_column(Boolean, default=False)
+    node_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    agent_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    lease_token: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+
 class VerificationAnalysisRow(Base):
     __tablename__ = "verification_analyses"
     analysis_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)

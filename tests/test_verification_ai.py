@@ -167,6 +167,10 @@ def context(tmp_path, monkeypatch):
         )
         db.commit()
     node = store.provision_node("test-agent", SECRET, 2)
+    from app.orm_models import JudgeNodeRow
+    with sessions() as db:
+        db.get(JudgeNodeRow, node.judge_node_id).execution_capabilities = ["zoj-judge-full-v1"]
+        db.commit()
     yield dict(
         cid=cid,
         pid=pid,
@@ -208,9 +212,10 @@ def submit(c, *, expected_status=SubmissionStatus.WRONG_ANSWER, claim=True):
             expected_status,
             None,
             "testcase #1: wrong answer\n[input]\n2 3\n[expected]\n5\n[actual]\n4",
-            1,
+            None if expected_status == SubmissionStatus.ACCEPTED else 1,
             10,
             1024,
+            testcase_results=[{"index": 1, "final_status": expected_status.value, "runtime_ms": 10, "memory_kb": 1024}] if expected_status not in {SubmissionStatus.COMPILE_ERROR, SubmissionStatus.SYSTEM_ERROR} else None,
         )
     return sid
 
@@ -608,9 +613,9 @@ def test_saved_verdict_is_shared_without_an_ai_request_or_api_key(context, monke
     assert saved["status"] == verdict.value
     assert saved["submitted_by_name"] == "owner"
     assert saved["submitted_at"]
-    assert saved["failed_testcase_order"] == 1
-    assert saved["runtime_ms"] == 10
-    assert saved["memory_kb"] == 1024
+    assert saved["failed_testcase_order"] == (None if verdict == SubmissionStatus.ACCEPTED else 1)
+    assert saved["runtime_ms"] == (None if verdict in {SubmissionStatus.COMPILE_ERROR, SubmissionStatus.SYSTEM_ERROR} else 10)
+    assert saved["memory_kb"] == (None if verdict in {SubmissionStatus.COMPILE_ERROR, SubmissionStatus.SYSTEM_ERROR} else 1024)
     assert saved["compile_message"] == "compiler diagnostic\n"
     assert "[input]\n2 3\n[expected]\n5\n[actual]\n4" in saved["judge_message"]
     assert "source_code" not in saved
@@ -630,7 +635,8 @@ def test_latest_request_and_its_analysis_win_when_older_judgment_finishes_last(c
         job = by_submission[sid]
         store.report_judge_result(
             job["judge_job_id"], SECRET, job["lease_token"], verdict,
-            None, message, 1, 10, 1024,
+            None, message, None if verdict == SubmissionStatus.ACCEPTED else 1, 10, 1024,
+            testcase_results=[{"index": 1, "final_status": verdict.value, "runtime_ms": 10, "memory_kb": 1024}],
         )
 
     path = c["base"] + "/verification-runs"

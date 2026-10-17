@@ -97,6 +97,7 @@ def judged(c, expected, *, source=None):
         1 if expected != SubmissionStatus.ACCEPTED else None,
         10,
         1024,
+        **({"testcase_results": [{"index": case["display_order"], "final_status": expected.value, "runtime_ms": 10, "memory_kb": 1024} for case in job["testcases"]]} if job.get("collect_all_results") else {}),
     )
     ready(c)
     return job

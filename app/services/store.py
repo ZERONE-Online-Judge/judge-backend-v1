@@ -4108,6 +4108,8 @@ class DbStore:
             if run:
                 run.context_hash = None
                 run.analysis_id = None
+                from app.services.verification_execution import requeue
+                requeue(db, submission_id)
             db.commit()
             db.refresh(submission)
             return _submission(submission), jsonable_encoder(previous)
@@ -5322,10 +5324,15 @@ class DbStore:
             is_ai_trial = select(VerificationTrialRow.submission_id).where(
                 VerificationTrialRow.submission_id == JudgeJobRow.submission_id
             ).exists()
+            from app.orm_models import VerificationExecutionRow
+            from app.services import verification_execution
+            full_verification = select(VerificationExecutionRow.submission_id).where(
+                VerificationExecutionRow.submission_id == JudgeJobRow.submission_id).exists()
             rows = db.scalars(
                 select(JudgeJobRow)
                 .join(SubmissionRow, SubmissionRow.submission_id == JudgeJobRow.submission_id)
                 .where(JudgeJobRow.status == JudgeJobStatus.PENDING.value)
+                .where(~full_verification if verification_execution.CAPABILITY not in (node.execution_capabilities or []) else True)
                 .where(SubmissionRow.language.in_(LANGUAGES if ICPC_CAPABILITY in (node.execution_capabilities or []) else [lang for lang in LANGUAGES if lang not in NEW_LANGUAGES]))
                 .order_by(sql_case((is_ai_trial, 2), (rejudging.is_job(), 1), else_=0), JudgeJobRow.queue_position)
                 .limit(safe_max_count)
@@ -5433,6 +5440,7 @@ class DbStore:
                     if submission.submission_kind == "operator_test":
                         from app.services.verification_ai import snapshot_claim
                         snapshot_claim(db, submission, problem, active_set, testcase_rows)
+                    collect_all = verification_execution.claim(db, submission, node, row, active_set, testcase_rows) if submission.submission_kind == "operator_test" else False
                     submission.status = SubmissionStatus.PREPARING.value
                     submission.status_updated_at = now_utc()
                     submission.compile_message = None
@@ -5450,6 +5458,7 @@ class DbStore:
                             "testcases": testcases,
                             "package_files": package_files,
                             "bundle_url": bundle_url,
+                            **({"collect_all_results": True} if collect_all else {}),
                         }
                     )
             db.commit()
@@ -5723,6 +5732,8 @@ class DbStore:
                 submission.failed_testcase_order = None
                 submission.progress_current = None
                 submission.progress_total = None
+                from app.services.verification_execution import requeue
+                requeue(db, submission.submission_id)
 
     def _owned_running_job(self, db: Session, job_id: str, node_secret: str, lease_token: str) -> JudgeJobRow | None:
         # Serialize progress, renewal and finalization against other job writers.
@@ -5750,6 +5761,7 @@ class DbStore:
         status: SubmissionStatus,
         progress_current: int | None,
         progress_total: int | None,
+        *, testcase_result: dict | None = None, testcase_results: list[dict] | None = None,
     ) -> tuple[Submission, JudgeJob] | None:
         if status not in JUDGE_PROGRESS_STATUSES:
             raise ValueError("invalid judge progress status")
@@ -5766,6 +5778,15 @@ class DbStore:
                 job.leased_at = now_utc()
                 db.commit()
                 return rejudging.candidate_submission(submission, rejudging_item), _job(job)
+            from app.services import verification_execution
+            execution = db.get(verification_execution.Execution, submission.submission_id)
+            if execution:
+                if progress_total not in {None, len(execution.testcases)} or (testcase_result is not None and testcase_results is not None):
+                    raise ValueError("lease mismatch: invalid verification progress")
+                verification_execution.merge(execution, [testcase_result] if testcase_result is not None else (testcase_results or []))
+                progress_current, progress_total = len(execution.results), len(execution.testcases)
+            elif testcase_result is not None or testcase_results is not None:
+                raise ValueError("lease mismatch: unrequested testcase results")
             submission.status = status.value
             submission.progress_total = max(progress_total, 0) if progress_total is not None else None
             if progress_current is None:
@@ -5807,10 +5828,24 @@ class DbStore:
         failed_testcase_order: int | None,
         runtime_ms: int | None = None,
         memory_kb: int | None = None,
+        *, testcase_results: list[dict] | None = None,
     ) -> tuple[Submission, JudgeJob] | None:
         if final_status not in JUDGE_FINAL_STATUSES:
             raise ValueError("invalid judge final status")
         with self._session() as db:
+            from app.services import verification_execution
+            candidate = db.scalar(select(JudgeJobRow).where(JudgeJobRow.judge_job_id == job_id).with_for_update())
+            execution = db.get(verification_execution.Execution, candidate.submission_id) if candidate else None
+            if candidate and execution and candidate.status == JudgeJobStatus.SUCCEEDED.value:
+                node = db.get(JudgeNodeRow, candidate.assigned_node_id)
+                self._check_node_secret(node, node_secret)
+                existing = db.get(SubmissionRow, candidate.submission_id)
+                if not execution.lease_token or not secrets.compare_digest(execution.lease_token.encode("utf-8"), lease_token.encode("utf-8")) or any([
+                    existing.status != final_status.value, existing.compile_message != compile_message,
+                    existing.judge_message != judge_message, existing.failed_testcase_order != failed_testcase_order]):
+                    raise ValueError("lease mismatch")
+                verification_execution.merge(execution, testcase_results or [], (final_status.value, failed_testcase_order))
+                return _submission(existing), _job(candidate)
             job = self._owned_running_job(db, job_id, node_secret, lease_token)
             if not job:
                 return None
@@ -5826,6 +5861,13 @@ class DbStore:
                 job.lease_token = None
                 db.commit()
                 return rejudging.candidate_submission(submission, rejudging_item), _job(job)
+            if execution:
+                verification_execution.merge(execution, testcase_results or [], (final_status.value, failed_testcase_order))
+                metrics = verification_execution.summary(execution)
+                runtime_ms, memory_kb = metrics["runtime_ms"], metrics["memory_kb"]
+                submission.progress_current, submission.progress_total = len(execution.results), len(execution.testcases)
+            elif testcase_results is not None:
+                raise ValueError("lease mismatch: unrequested testcase results")
             submission.status = final_status.value
             submission.compile_message = compile_message
             submission.judge_message = judge_message

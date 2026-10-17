@@ -121,6 +121,9 @@ def _create(store, cid, *, submission_id=None, problem_id=None, team_id=None, la
             target = db.get(SubmissionRow, submission_id)
             if not target or target.contest_id != cid:
                 raise AppError(404, "not_found", "제출을 찾을 수 없습니다.")
+            from app.orm_models import VerificationExecutionRow
+            if db.get(VerificationExecutionRow, submission_id):
+                conflict("검증 코드는 문제 관리의 ‘검증 코드 채점’에서 다시 채점해 주세요. 전체 테스트의 실행 기록을 새로 저장합니다.")
             problem_id = target.problem_id
         context, problem, active, cases = context_snapshot(db, problem_id)
         if problem.contest_id != cid:

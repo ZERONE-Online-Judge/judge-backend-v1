@@ -99,6 +99,8 @@ def attach_run(db, submission, asset_id):
             "verification_source_changed",
             "저장된 검증 코드와 제출 코드가 다릅니다. 새로고침 후 다시 채점해 주세요.",
         )
+    from app.services.verification_execution import attach
+    attach(db, submission)
     db.add(
         Run(
             submission_id=submission.submission_id,
@@ -252,11 +254,13 @@ def list_runs(cid, pid):
             .where(Run.problem_id == pid, Run.contest_id == cid)
             .subquery()
         )
+        from app.orm_models import VerificationExecutionRow as Execution
         rows = db.execute(
-            select(Run, SubmissionRow, Analysis, ProblemAssetRow)
+            select(Run, SubmissionRow, Analysis, ProblemAssetRow, Execution.summary)
             .join(SubmissionRow, Run.submission_id == SubmissionRow.submission_id)
             .join(ProblemAssetRow, Run.asset_id == ProblemAssetRow.asset_id)
             .outerjoin(Analysis, Run.analysis_id == Analysis.analysis_id)
+            .outerjoin(Execution, Run.submission_id == Execution.submission_id)
             .join(ranked, Run.submission_id == ranked.c.submission_id)
             .where(ranked.c.rank == 1)
             .limit(500)
@@ -278,7 +282,7 @@ def list_runs(cid, pid):
             "progress_current",
             "progress_total",
         )
-        for run, submission, analysis, asset in rows:
+        for run, submission, analysis, asset, execution in rows:
             result.append(
                 {
                     "asset_id": run.asset_id,
@@ -298,6 +302,7 @@ def list_runs(cid, pid):
                         )
                     },
                     "expected_status": run.expected_status,
+                    "execution": execution,
                     "snapshot_available": bool(run.context_hash),
                     "submission": {name: getattr(submission, name) for name in fields},
                     "stale": bool(run.context_hash and run.context_hash != current),
@@ -344,7 +349,8 @@ def analysis_detail(cid, pid, sid):
 
 
 def _queue(db, run, submission):
-    if submission.status in PENDING or submission.status == run.expected_status:
+    from app.services.verification_execution import Execution, expectation_matches
+    if submission.status in PENDING or expectation_matches(run.expected_status, submission.status, db.get(Execution, submission.submission_id)):
         raise AppError(
             409,
             "verification_no_mismatch",
@@ -955,9 +961,9 @@ def process_one():
 
 
 def delete_problem_reviews(db, problem_id):
-    from app.orm_models import VerificationTrialRow, VerificationTaskRow
+    from app.orm_models import VerificationTrialRow, VerificationTaskRow, VerificationExecutionRow
 
-    for model in (VerificationTaskRow, VerificationTrialRow, Run, Analysis, Snapshot):
+    for model in (VerificationTaskRow, VerificationTrialRow, VerificationExecutionRow, Run, Analysis, Snapshot):
         db.execute(delete(model).where(model.problem_id == problem_id))
 
 

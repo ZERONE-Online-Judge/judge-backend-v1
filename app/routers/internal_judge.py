@@ -8,7 +8,7 @@ from app.settings import settings
 from app.services.errors import AppError, not_found
 from app.services.responses import ok
 from app.services.store import store
-from app.services import editor_judging, editor_execution
+from app.services import editor_judging, editor_execution, verification_execution
 
 router = APIRouter(tags=["internal-judge"])
 
@@ -27,7 +27,7 @@ class RegisterNodeRequest(NodeCredentialRequest):
     @field_validator("execution_capabilities")
     @classmethod
     def supported_capabilities(cls, value):
-        if any(item not in {"editor-execute-v1", editor_judging.FULL_VERIFICATION, "judge-icpc-languages-v1", "editor-icpc-languages-v1"} for item in value):
+        if any(item not in {"editor-execute-v1", editor_judging.FULL_VERIFICATION, verification_execution.CAPABILITY, "judge-icpc-languages-v1", "editor-icpc-languages-v1"} for item in value):
             raise ValueError("Unsupported execution capability")
         return sorted(set(value))
 
@@ -195,6 +195,7 @@ async def report_result(job_id: str, payload: ResultRequest, request: Request):
             payload.failed_testcase_order,
             payload.runtime_ms,
             payload.memory_kb,
+            testcase_results=[case.model_dump() for case in payload.testcase_results] if payload.testcase_results is not None else None,
         )
         if result is None:
             editor_result = await asyncio.to_thread(
@@ -228,6 +229,8 @@ async def report_progress(job_id: str, payload: ProgressRequest, request: Reques
             payload.status,
             payload.progress_current,
             payload.progress_total,
+            testcase_result=payload.testcase_result.model_dump() if payload.testcase_result else None,
+            testcase_results=[case.model_dump() for case in payload.testcase_results] if payload.testcase_results is not None else None,
         )
         if result is None:
             editor_result = await asyncio.to_thread(

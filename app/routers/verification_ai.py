@@ -142,3 +142,17 @@ def workspace(contest_id: str, problem_id: str, submission_id: str, request: Req
             "Content-Disposition": 'attachment; filename="verification-workspace.zip"'
         },
     )
+
+
+@router.get("/operator/contests/{contest_id}/problems/{problem_id}/verification-runs/{submission_id}/testcases")
+def verification_testcases(contest_id: str, problem_id: str, submission_id: str, request: Request):
+    from app.services import verification_execution
+    require_access(request, contest_id)
+    return ok(request, verification_execution.case_list(contest_id, problem_id, submission_id))
+
+
+@router.get("/operator/contests/{contest_id}/problems/{problem_id}/verification-runs/{submission_id}/testcases/{index}")
+def verification_testcase_detail(contest_id: str, problem_id: str, submission_id: str, index: int, request: Request):
+    from app.services import verification_execution
+    require_access(request, contest_id)
+    return ok(request, verification_execution.case_detail(contest_id, problem_id, submission_id, index))
