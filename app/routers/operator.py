@@ -1522,10 +1522,21 @@ async def update_problem(contest_id: str, problem_id: str, payload: ProblemUpdat
 
 
 @router.delete("/operator/contests/{contest_id}/problems/{problem_id}")
-async def delete_problem(contest_id: str, problem_id: str, request: Request):
-    require_contest_staff(request, contest_id, "contest.problem.manage")
+async def delete_problem(contest_id: str, problem_id: str, request: Request, cancel_rejudging: bool = False):
+    account = require_contest_staff(request, contest_id, "contest.problem.manage")
     _require_contest_mutation_open(contest_id)
-    problem = store.delete_problem(contest_id, problem_id)
+    if cancel_rejudging:
+        from app.services import rejudging
+        pending = await asyncio.to_thread(rejudging.pending_for_problem, store, contest_id, problem_id)
+        if pending and not all(has_contest_permission(account, contest_id, permission)
+            for permission in ("contest.submission.view", "contest.problem.test")):
+            raise AppError(403, "problem_deletion_rejudging_permission",
+                "이 문제에 미처리 재채점 작업이 있습니다. 재채점 권한이 있는 운영자가 작업을 취소한 뒤 삭제해 주세요.")
+        for batch_id in pending:
+            # Use the normal cancellation locks and lease revocation. Deletion
+            # still checks for new or conflicting work before removing data.
+            await asyncio.to_thread(rejudging.decide, store, contest_id, batch_id, "cancel", account)
+    problem = await asyncio.to_thread(store.delete_problem, contest_id, problem_id)
     if not problem:
         raise not_found()
     return ok(request, problem.model_dump(mode="json"))

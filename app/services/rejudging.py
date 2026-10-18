@@ -108,6 +108,14 @@ def active_for_problem(db, problem_id):
         .where(Batch.problem_id == problem_id, Item.active_submission_id.is_not(None)).limit(1)) is not None
 
 
+def pending_for_problem(store, contest_id, problem_id):
+    with store._session() as db:
+        return list(db.scalars(select(Batch.rejudging_id).where(
+            Batch.contest_id == contest_id, Batch.problem_id == problem_id,
+            Batch.status == "pending",
+        ).order_by(Batch.rejudging_id)))
+
+
 def create(store, cid, **kwargs):
     try:
         return _create(store, cid, **kwargs)
