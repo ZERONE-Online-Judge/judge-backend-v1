@@ -1190,6 +1190,7 @@ class DbStore:
         exclude_operator_tests: bool = False,
         include_participant_previews: bool = False,
         include_source: bool = False,
+        submission_kind: str | None = None,
         limit: int = 100,
         cursor: str | None = None,
     ) -> tuple[list[Submission], str | None, int]:
@@ -1209,6 +1210,24 @@ class DbStore:
             filters.append(SubmissionRow.problem_id == problem_id)
         if participant_team_id:
             filters.append(SubmissionRow.participant_team_id == participant_team_id)
+        if submission_kind:
+            operator_team_ids = select(ParticipantTeamRow.participant_team_id).where(
+                ParticipantTeamRow.team_name.startswith(OPERATOR_TEST_TEAM_PREFIX, autoescape=True)
+            )
+            if contest_id:
+                operator_team_ids = operator_team_ids.where(ParticipantTeamRow.contest_id == contest_id)
+            if submission_kind == "operator_test":
+                filters.append(or_(
+                    SubmissionRow.submission_kind == "operator_test",
+                    (SubmissionRow.submission_kind == "participant") & SubmissionRow.participant_team_id.in_(operator_team_ids),
+                ))
+            else:
+                filters.append(SubmissionRow.submission_kind == submission_kind)
+                if submission_kind == "participant":
+                    filters.append(or_(
+                        SubmissionRow.participant_team_id.is_(None),
+                        SubmissionRow.participant_team_id.not_in(operator_team_ids),
+                    ))
         if exclude_operator_tests:
             filters.append(SubmissionRow.submission_kind == "participant")
             operator_team_ids = select(ParticipantTeamRow.participant_team_id).where(

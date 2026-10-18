@@ -1142,6 +1142,7 @@ async def operator_submissions(
     division_id: str | None = None,
     problem_id: str | None = None,
     participant_team_id: str | None = None,
+    submission_kind: Literal["participant", "operator_test", "participant_preview", "mock_judging"] | None = None,
 ):
     require_contest_staff(request, contest_id, "contest.submission.view")
     submissions, next_cursor, total_count = store.list_submissions(
@@ -1151,6 +1152,7 @@ async def operator_submissions(
         participant_team_id=participant_team_id,
         include_source=include_source,
         include_participant_previews=True,
+        submission_kind=submission_kind,
         limit=limit,
         cursor=cursor,
     )
