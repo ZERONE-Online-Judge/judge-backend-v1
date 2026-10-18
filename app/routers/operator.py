@@ -24,7 +24,7 @@ from app.services.package_builder import PackageBuildError, package_role, is_edi
 from app.services.responses import ok, page
 from app.services.mail_logs import list_mail_logs, mail_log_filters, mail_log_preview
 from app.settings import settings
-from app.services.store import SERVICE_MASTER_OPERATOR_ERROR, store
+from app.services.store import SERVICE_MASTER_OPERATOR_ERROR, _schedule_status, store
 from app.services.storage import object_storage
 from app.services.testcase_verifier import UploadedTestcase, build_verified_testcase_set, verify_active_testcases_with_candidate_asset
 
@@ -685,8 +685,13 @@ async def update_contest_settings(contest_id: str, payload: ContestSettingsUpdat
         if key in updates and getattr(contest, key) != updates[key]
     ]
     auto_notice = time_update_notice_body(contest.title, changed_time_fields)
-    time_changed = bool(auto_notice)
-    if time_changed and settings.feature_emergency_notice_auto:
+    next_status = _schedule_status(updates.get("status") or contest.status, start_at, end_at, now_utc())
+    announce_time_change = (
+        bool(auto_notice)
+        and settings.feature_emergency_notice_auto
+        and next_status in {ContestStatus.OPEN, ContestStatus.RUNNING}
+    )
+    if announce_time_change:
         manual_notice = updates.get("emergency_notice")
         updates["emergency_notice"] = f"{auto_notice}\n\n{manual_notice}".strip() if manual_notice else auto_notice
     try:
@@ -704,7 +709,7 @@ async def update_contest_settings(contest_id: str, payload: ContestSettingsUpdat
             continue
         changed_lines.append(f"- {key}: {old_value} -> {new_value}")
     if changed_lines:
-        if time_changed and settings.feature_emergency_notice_auto:
+        if announce_time_change:
             store.create_contest_notice(
                 contest_id,
                 "대회 일정 변경",
