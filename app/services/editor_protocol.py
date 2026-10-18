@@ -10,8 +10,8 @@ import zipfile
 
 PROTOCOL = "editor-execute-v1"
 FORMAT = "zoj-editor-execute-v1"
-MAX_FILES_BYTES = 64 * 1024**2
-MAX_WIRE_BYTES = 128 * 1024**2
+MAX_FILES_BYTES = 512 * 1024**2
+MAX_WIRE_BYTES = 768 * 1024**2
 KINDS = {"prepare", "verify", "validator-tests", "checker-tests", "stress", "package", "render"}
 STATUSES = {"ok", "time-limit", "memory-limit", "wall-limit", "output-limit"}
 
@@ -90,7 +90,7 @@ def validate_payload(value):
             raise ValueError("Invalid file entry")
         total += len(encoded(entry["base64"], MAX_FILES_BYTES))
         if total > MAX_FILES_BYTES:
-            raise ValueError("Execution files exceed 64MiB")
+            raise ValueError("Execution files exceed 512MiB")
     if ".input" not in files:
         raise ValueError("Missing standard input")
     return value

@@ -9,7 +9,7 @@ location ^~ /api/internal/judge/editor-tasks/ {
     allow 10.10.10.116;
     allow 10.10.10.117;
     deny all;
-    client_max_body_size 128m;
+    client_max_body_size 768m;
     proxy_request_buffering off;
     proxy_read_timeout 150s;
     proxy_pass http://api_backend;

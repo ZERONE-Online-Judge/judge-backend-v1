@@ -29,8 +29,8 @@ from app.judge_languages import LANGUAGES, NEW_LANGUAGES, ICPC_CAPABILITY
 
 ACTIVE = {"uploading", "waiting", "preparing", "judging"}
 RUNNING = {"preparing", "judging"}
-MAX_ARCHIVE = 128 * 1024**2
-MAX_CONTENT = 256 * 1024**2
+MAX_ARCHIVE = 512 * 1024**2
+MAX_CONTENT = 512 * 1024**2
 HASH = r"^[a-f0-9]{64}$"
 FULL_VERIFICATION = "editor-judge-full-v1"
 MAX_CASE_OUTPUT_BYTES = 256 * 1024
@@ -135,7 +135,7 @@ def create(email, source, fingerprint):
     """Validate every byte before storage; the signed caller supplies no URLs."""
     source.seek(0, 2)
     if source.tell() > MAX_ARCHIVE:
-        raise AppError(413, "editor_judge_archive_large", "채점 자료 ZIP은 128MiB 이하여야 합니다.")
+        raise AppError(413, "editor_judge_archive_large", "채점 자료 ZIP은 512MiB 이하여야 합니다.")
     source.seek(0)
     try:
         archive = zipfile.ZipFile(source)
@@ -143,7 +143,7 @@ def create(email, source, fingerprint):
         if len(entries) > 2102 or len({i.filename for i in entries}) != len(entries):
             raise ValueError("Duplicate or too many archive entries")
         if sum(i.file_size for i in entries) > MAX_CONTENT:
-            raise ValueError("Expanded snapshot exceeds 256MiB")
+            raise ValueError("Expanded snapshot exceeds 512MiB")
         for entry in entries:
             mode = entry.external_attr >> 16
             if entry.flag_bits & 1 or (stat.S_IFMT(mode) and not stat.S_ISREG(mode)):
@@ -164,8 +164,8 @@ def create(email, source, fingerprint):
             raise ValueError("Snapshot files do not match the manifest")
         content = {}
         for sha in hashes:
-            if archive.getinfo("blobs/" + sha).file_size > 32 * 1024**2:
-                raise ValueError("A snapshot file exceeds 32MiB")
+            if archive.getinfo("blobs/" + sha).file_size > 128 * 1024**2:
+                raise ValueError("A snapshot file exceeds 128MiB")
             blob = archive.read("blobs/" + sha)
             if hashlib.sha256(blob).hexdigest() != sha:
                 raise ValueError("Snapshot content hash mismatch")

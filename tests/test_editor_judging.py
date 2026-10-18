@@ -526,3 +526,22 @@ def test_new_judge_languages_do_not_run_on_legacy_agents(database,language):
         row.execution_capabilities=[judging.FULL_VERIFICATION,'judge-icpc-languages-v1']
         db.commit()
     assert judging.claim_jobs(n,SECRET,1)[0]['submission']['language']==language
+
+
+def test_signed_snapshot_accepts_40_mib_testcase_and_preserves_input(database):
+    content = b'1234567\n' * (5 * 1024**2)
+    sha = hashlib.sha256(content).hexdigest()
+    def change(manifest, files):
+        case = manifest['testcases'][0]
+        previous = case['input_sha']
+        case['input_sha'] = sha
+        files['blobs/'+sha] = content
+        del files['blobs/'+previous]
+    response = submit(snapshot(change=change))
+    assert response.status_code == 202, response.text
+    with database() as db:
+        run = db.get(Run, response.json()['data']['id'])
+        key = run.payload['testcases'][0]['input_storage_key']
+        assert object_storage.read_bytes(key) == content
+    assert judging.MAX_ARCHIVE == 512 * 1024**2
+    assert judging.MAX_CONTENT == 512 * 1024**2

@@ -45,7 +45,7 @@ async def create_run(request: Request):
             async for chunk in request.stream():
                 size += len(chunk)
                 if size > judging.MAX_ARCHIVE:
-                    raise AppError(413, "editor_judge_archive_large", "채점 자료 ZIP은 128MiB 이하여야 합니다.")
+                    raise AppError(413, "editor_judge_archive_large", "채점 자료 ZIP은 512MiB 이하여야 합니다.")
                 digest.update(chunk)
                 await run_in_threadpool(source.write, chunk)
             if digest.hexdigest() != expected:
