@@ -23,3 +23,17 @@ CPython by extension. Ordinary old assets keep filename-based inference.
 
 See the judge-agent and Editor `docs/icpc-languages.md` for pinned toolchains,
 resource accounting and capability-gated deployment.
+
+
+## Language resource policy
+
+Per-language limits accept optional time_limit_ms, memory_limit_mb, and
+strict boolean disable_auto_adjustment. Explicit fields take precedence.
+If correction is disabled, unspecified fields follow the current problem
+base; otherwise the agent's normal language policy applies. Per-test limits
+still take precedence over every per-language setting.
+
+Problem copy, archive import/export, Editor snapshots, and package updates
+preserve this policy. Before dispatch, the backend resolves disabled fields
+to explicit numeric limits. This supports the existing deployed judge agents
+without requiring a new agent version or changing already-running jobs.

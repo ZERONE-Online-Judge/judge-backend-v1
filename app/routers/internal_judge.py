@@ -178,6 +178,8 @@ async def claim(node_id: str, payload: ClaimRequest, request: Request):
         await asyncio.sleep(min(settings.judge_claim_poll_interval_seconds, deadline - elapsed))
     if jobs is None:
         raise not_found()
+    from app.language_limits import agent_problem
+    jobs = [{**job, "problem": agent_problem(job["problem"])} if isinstance(job.get("problem"), dict) and "time_limit_ms" in job["problem"] else job for job in jobs]
     return ok(request, {"jobs": jobs})
 
 

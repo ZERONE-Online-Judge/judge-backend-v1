@@ -1,3 +1,4 @@
+from pydantic import model_serializer
 from datetime import datetime, timedelta, timezone
 from enum import StrEnum
 from typing import Any
@@ -171,6 +172,14 @@ class Problem(ProblemStatements, ProgrammingLanguages):
 
 
 class ProblemLanguageResourceLimit(BaseModel):
+    disable_auto_adjustment: bool = Field(default=False, strict=True)
+
+    @model_serializer(mode="wrap")
+    def serialize(self, handler):
+        value=handler(self)
+        if not self.disable_auto_adjustment: value.pop("disable_auto_adjustment", None)
+        return value
+
     time_limit_ms: int | None = None
     memory_limit_mb: int | None = None
 

@@ -26,6 +26,8 @@ from app.services.node_credentials import valid_node_credential
 from app.services.storage import object_storage
 from app.settings import settings
 from app.judge_languages import LANGUAGES, NEW_LANGUAGES, ICPC_CAPABILITY
+from app.services.problem_archive import ResourceLimit
+from app.language_limits import agent_problem
 
 ACTIVE = {"uploading", "waiting", "preparing", "judging"}
 RUNNING = {"preparing", "judging"}
@@ -88,6 +90,15 @@ class Snapshot(Strict):
     time_limit_ms: int = Field(ge=100, le=10000)
     memory_limit_mb: int = Field(ge=16, le=1024)
     collect_all_results: bool = False
+    language_resource_limits: dict[str, ResourceLimit] = Field(default_factory=dict, max_length=6)
+
+    @field_validator("language_resource_limits")
+    @classmethod
+    def known_limit_languages(cls, value):
+        if set(value) - set(LANGUAGES):
+            raise ValueError("Unknown language resource limits")
+        return value
+
     testcases: list[Case] = Field(min_length=1, max_length=1000)
     resources: list[Resource] = Field(min_length=1, max_length=100)
 
@@ -201,6 +212,7 @@ def create(email, source, fingerprint):
             raise AppError(429, "editor_judge_busy", "채점 대기열이 가득 찼습니다. 잠시 후 다시 요청하세요.")
         dataset_key = hashlib.sha256(json.dumps([
             snapshot.project_id, snapshot.context_hash, snapshot.time_limit_ms, snapshot.memory_limit_mb,
+            {key: value.model_dump(exclude_none=True) for key,value in snapshot.language_resource_limits.items()},
             [c.model_dump() for c in sorted(snapshot.testcases, key=lambda c: c.index)],
             [r.model_dump() for r in sorted(snapshot.resources, key=lambda r: r.name)],
         ], sort_keys=True, separators=(",", ":")).encode()).hexdigest()
@@ -219,6 +231,7 @@ def create(email, source, fingerprint):
                       payload={"language": snapshot.source.language, "source_code": code,
                                "source_name": snapshot.source.name, "context_hash": snapshot.context_hash,
                                "time_limit_ms": snapshot.time_limit_ms, "memory_limit_mb": snapshot.memory_limit_mb,
+                               "language_resource_limits": {key: value.model_dump(exclude_none=True) for key,value in snapshot.language_resource_limits.items()},
                                "collect_all_results": snapshot.collect_all_results,
                                "bundle_key": bundle_key, "base_bundle_key": bundle_key, "excluded_orders": [],
                                "testcases": case_refs,
@@ -412,7 +425,7 @@ def claim_jobs(node_id, node_secret, max_count, session_factory=None):
                 "judge_job_id": row.run_id, "lease_token": row.lease_token,
                 "submission": {"submission_id": row.run_id, "submission_kind": "editor_verification", "language": payload["language"], "source_code": payload["source_code"]},
                 "collect_all_results": bool(payload.get("collect_all_results")),
-                "problem": {"problem_id": row.project_id, "time_limit_ms": payload["time_limit_ms"], "memory_limit_mb": payload["memory_limit_mb"], "language_resource_limits": {}},
+                "problem": agent_problem({"problem_id": row.project_id, "time_limit_ms": payload["time_limit_ms"], "memory_limit_mb": payload["memory_limit_mb"], "language_resource_limits": payload.get("language_resource_limits", {})}),
                 # The bundle is an optimization. Keep real per-object fallback
                 # references so a download failure cannot become a no-test AC.
                 "testcases": [{**c, "input_url": object_storage.internal_presigned_get_url(c["input_storage_key"]),

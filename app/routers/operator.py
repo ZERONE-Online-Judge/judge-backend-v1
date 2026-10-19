@@ -51,6 +51,7 @@ SUPPORTED_JUDGE_LANGUAGES = set(LANGUAGES)
 
 
 class ProblemLanguageResourceLimitPayload(BaseModel):
+    disable_auto_adjustment: bool = Field(default=False, strict=True)
     time_limit_ms: int | None = Field(default=None, ge=100, le=10000)
     memory_limit_mb: int | None = Field(default=None, ge=16, le=1024)
 
@@ -66,6 +67,8 @@ def _clean_language_resource_limits(
         if language not in SUPPORTED_JUDGE_LANGUAGES:
             raise ValueError(f"unsupported language resource limit: {language}")
         payload = limits.model_dump(exclude_none=True)
+        if not payload.get("disable_auto_adjustment"):
+            payload.pop("disable_auto_adjustment", None)
         if payload:
             cleaned[language] = payload
     return cleaned

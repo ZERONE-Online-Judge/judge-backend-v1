@@ -1,5 +1,6 @@
 """Portable problem archives. Only data is imported; no archived code is executed."""
 from __future__ import annotations
+from pydantic import model_serializer
 
 import hashlib
 import json
@@ -48,6 +49,14 @@ class ArchiveModel(BaseModel):
 
 
 class ResourceLimit(ArchiveModel):
+    disable_auto_adjustment: bool = False
+
+    @model_serializer(mode="wrap")
+    def serialize(self, handler):
+        value=handler(self)
+        if not self.disable_auto_adjustment: value.pop("disable_auto_adjustment", None)
+        return value
+
     time_limit_ms: StrictInt | None = Field(default=None, ge=100, le=10000)
     memory_limit_mb: StrictInt | None = Field(default=None, ge=16, le=1024)
 
