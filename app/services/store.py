@@ -2643,6 +2643,10 @@ class DbStore:
                 raise AppError(409, "email_already_in_use", "이미 다른 계정에서 사용한 이메일입니다. 다른 이메일을 입력해 주세요.") from error
             raise
 
+    def replace_contest_operator_account(self, contest_id, email, target_email, display_name, roles, *, actor):
+        from app.services.operator_reassignment import replace_account
+        return replace_account(self, contest_id, email, target_email, display_name, roles, actor)
+
     def remove_contest_operator(self, contest_id: str, email: str, *, actor: StaffAccount | None = None) -> StaffAccount | None:
         with self._session() as db:
             contest = db.scalar(select(ContestRow).where(ContestRow.contest_id == contest_id).with_for_update())

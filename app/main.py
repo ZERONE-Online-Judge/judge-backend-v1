@@ -126,6 +126,8 @@ def _audit_contest_id(path: str) -> str | None:
 
 
 def _audit_action(method: str, path: str) -> str:
+    if method.upper() == "POST" and re.fullmatch(r"/api/operator/contests/[^/]+/operators/[^/]+/account:replace", path):
+        return "운영자 계정 변경"
     if method.upper() == "POST" and re.search(r"/editor-problems/[a-f0-9]{32}/updates:preview$", path):
         return "Editor 패키지 업데이트 검토"
     if method.upper() == "POST" and re.search(r"/editor-problems/[a-f0-9]{32}/updates$", path):
@@ -275,7 +277,7 @@ def _audit_path_entities(path: str) -> dict[str, str]:
     patterns = [
         (r"^/api/operator/contests/([^/]+)/settings$", ["contest_id"]),
         (r"^/api/operator/contests/([^/]+)/divisions/([^/]+)$", ["contest_id", "division_id"]),
-        (r"^/api/operator/contests/([^/]+)/operators/([^/]+)$", ["contest_id", "operator_email"]),
+        (r"^/api/operator/contests/([^/]+)/operators/([^/]+)(?:/account:replace)?$", ["contest_id", "operator_email"]),
         (r"^/api/operator/contests/([^/]+)/notices/([^/]+)$", ["contest_id", "notice_id"]),
         (r"^/api/operator/contests/([^/]+)/boards/([^/]+)$", ["contest_id", "question_id"]),
         (

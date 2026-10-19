@@ -774,9 +774,14 @@ async def create_contest_operator(contest_id: str, payload: ContestOperatorCreat
         if message.startswith("operator email cannot be participant email:"):
             raise AppError(422, "validation_error", message, {"field": "operator_email_conflict"})
         raise AppError(404, "not_found", message)
+    _enqueue_operator_assignment_mail(contest_id, operator, payload.roles)
+    return ok(request, _contest_staff_payload(operator, contest_id))
+
+
+def _enqueue_operator_assignment_mail(contest_id, operator, fallback_roles):
     contest = store.contests.get(contest_id)
     if contest:
-        roles = operator.contest_roles.get(contest_id, payload.roles)
+        roles = operator.contest_roles.get(contest_id, fallback_roles)
         console_path = f"/contests/{contest_id}" if "participant_preview" in roles else f"/operator/contests/{contest_id}"
         if "participant_preview" in roles:
             # Draft contests are intentionally unavailable through the public API.
@@ -791,13 +796,12 @@ async def create_contest_operator(contest_id: str, payload: ContestOperatorCreat
         )
         store.enqueue_mail(
             "contest_operator_assigned",
-            str(payload.email),
+            str(operator.email),
             content.subject,
             content.body_text,
             content.body_html,
             contest_id=contest_id,
         )
-    return ok(request, _contest_staff_payload(operator, contest_id))
 
 
 @router.patch("/operator/contests/{contest_id}/operators/{operator_email}")
@@ -807,6 +811,15 @@ async def update_contest_operator(contest_id: str, operator_email: str, payload:
     operator = store.update_contest_operator(contest_id, operator_email, payload.display_name, payload.roles, new_email=str(payload.email) if payload.email is not None else None, actor=account)
     if not operator:
         raise not_found()
+    return ok(request, _contest_staff_payload(operator, contest_id))
+
+
+@router.post("/operator/contests/{contest_id}/operators/{operator_email}/account:replace")
+async def replace_contest_operator_account(contest_id: str, operator_email: str, payload: ContestOperatorCreateRequest, request: Request):
+    account = require_contest_staff(request, contest_id, "contest.staff.manage")
+    _check_staff_assignment(account, contest_id, operator_email, payload.roles)
+    operator = store.replace_contest_operator_account(contest_id, operator_email, str(payload.email), payload.display_name, payload.roles, actor=account)
+    _enqueue_operator_assignment_mail(contest_id, operator, payload.roles)
     return ok(request, _contest_staff_payload(operator, contest_id))
 
 

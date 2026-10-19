@@ -5,7 +5,7 @@ import re
 from sqlalchemy import func, select
 from app.orm_models import ProblemAssetRow, ProblemRow, StaffAccountRow, VerificationRunRow
 
-OPERATOR_PATH = re.compile(r"^/api/(?:operator|admin)/contests/([^/]+)/operators(?:/([^/]+))?$")
+OPERATOR_PATH = re.compile(r"^/api/(?:operator|admin)/contests/([^/]+)/operators(?:/([^/]+)(?:/account:replace)?)?$")
 VERIFICATION_PATH = re.compile(r"^/api/operator/contests/([^/]+)/problems/([^/]+)/(?:verification-tasks(?:/[^/]+(?:/stop)?)?|verification-runs/[^/]+/analysis)$")
 
 
