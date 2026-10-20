@@ -19,7 +19,7 @@ INDEX_ROBOTS = "index, follow, max-image-preview:large"
 NOINDEX_ROBOTS = "noindex, nofollow"
 CORE_PAGES = {
     "/": {
-        "title": "ZOJ · Zerone Online Judge | 프로그래밍 대회 플랫폼",
+        "title": "홈 | ZOJ",
         "heading": "ZOJ · Zerone Online Judge",
         "description": "ZOJ는 프로그래밍 대회의 문제, 참가자, 코드 제출, 자동 채점과 스코어보드를 관리하는 플랫폼입니다.",
         "paragraphs": [
@@ -28,7 +28,7 @@ CORE_PAGES = {
         ],
     },
     "/about": {
-        "title": "ZOJ 소개 | 프로그래밍 대회의 준비부터 결과 공개까지",
+        "title": "ZOJ 소개 | ZOJ",
         "heading": "ZOJ 소개",
         "description": "ZOJ의 문제·테스트 검증, 참가자 관리, 자동 채점, 스코어보드와 결과 공개 기능을 소개합니다.",
         "paragraphs": [
@@ -37,7 +37,7 @@ CORE_PAGES = {
         ],
     },
     "/editor": {
-        "title": "ZOJ Editor 소개 | 문제 제작과 검증",
+        "title": "Editor 소개 | ZOJ",
         "heading": "ZOJ Editor 소개",
         "description": "ZOJ Editor는 지문·테스트·풀이와 검수 기록을 관리하는 문제 제작 도구입니다. ZOJ 채점기 검증, 대회 문제 등록과 패키지 내보내기를 지원합니다.",
         "paragraphs": [
@@ -47,7 +47,7 @@ CORE_PAGES = {
         ],
     },
     "/contests": {
-        "title": "프로그래밍 대회 목록 | ZOJ",
+        "title": "대회 목록 | ZOJ",
         "heading": "프로그래밍 대회 목록",
         "description": "ZOJ에서 열리는 프로그래밍 대회를 찾아보세요. 대회 소개와 주최, 진행 일정, 참가 현황 및 종료된 대회의 공개 자료를 확인할 수 있습니다.",
         "paragraphs": ["대회별 소개와 주최, 시작·종료 일정 및 참가 현황을 확인하세요. 종료된 대회의 자료는 대회 운영진이 설정한 공개 범위에 따라 제공됩니다."],
@@ -59,13 +59,13 @@ CORE_PAGES = {
         "paragraphs": ["서비스 업데이트, 점검과 긴급 공지사항을 확인합니다."],
     },
     "/judge-status": {
-        "title": "채점 서버 상태 | ZOJ",
+        "title": "채점 안내 | ZOJ",
         "heading": "채점 서버 상태",
         "description": "ZOJ 채점 서버의 연결 상태를 확인하세요. 서버 연결 정보가 주기적으로 갱신되며, 코드 제출부터 결과 확인까지의 채점 과정도 안내합니다.",
         "paragraphs": ["채점 서버의 연결 상태를 주기적으로 확인합니다. 내 코드의 진행 상황과 결과는 대회 채점현황에서 확인할 수 있습니다."],
     },
     "/support": {
-        "title": "지원 안내 | ZOJ 이용안내·규정·도움말",
+        "title": "지원 안내 | ZOJ",
         "heading": "ZOJ 지원 안내",
         "description": "ZOJ 이용안내, 대회 참가 규정, 로그인과 코드 제출에 관한 도움말을 확인하세요. 개인정보 처리 안내와 서비스 문의도 지원 안내에서 찾을 수 있습니다.",
         "paragraphs": [
@@ -74,7 +74,7 @@ CORE_PAGES = {
         ],
     },
     "/support/rules": {
-        "title": "대회 참가 규정 | ZOJ 지원 안내",
+        "title": "대회 참가 규정 | ZOJ",
         "heading": "대회 참가 규정",
         "description": "ZOJ 대회 참가 유형과 접근 범위, 채점 결과와 스코어보드, 프리즈 및 종료 후 자료 공개에 관한 서비스 기준을 확인하세요.",
         "paragraphs": [
@@ -83,7 +83,7 @@ CORE_PAGES = {
         ],
     },
     "/support/help": {
-        "title": "자주 묻는 질문 | ZOJ 도움말",
+        "title": "자주 묻는 질문 | ZOJ",
         "heading": "ZOJ 도움말",
         "description": "로그인, 대회 접근, 코드 제출과 채점 결과, 스코어보드 프리즈 및 세션 만료에 관한 자주 묻는 질문과 답변을 확인하세요.",
         "paragraphs": [
@@ -101,7 +101,7 @@ CORE_PAGES = {
         ],
     },
     "/support/contact": {
-        "title": "서비스 문의 | ZOJ 지원 안내",
+        "title": "서비스 문의 | ZOJ",
         "heading": "ZOJ 서비스 문의",
         "description": "ZOJ 이용 중 궁금한 점과 불편한 점을 남겨 주세요. 서비스 문의 양식으로 접수하면 입력한 이메일 주소로 답변을 받을 수 있습니다.",
         "paragraphs": ["이용 중 불편했던 점이나 궁금한 점을 이름, 이메일, 문의 제목과 내용으로 남겨 주세요. 답변은 입력한 이메일 주소로 보내드립니다."],
@@ -238,17 +238,59 @@ def _not_found(path: str) -> dict:
                  indexable=False, status_code=404)
 
 
+PRIVATE_PAGES = {
+    "/login": "로그인",
+    "/admin": "관리자 콘솔",
+    "/admin/contests": "대회 관리",
+    "/admin/judge": "채점 관리",
+    "/admin/analytics": "운영 통계",
+    "/admin/audit-logs": "운영 로그",
+    "/admin/inquiries": "문의 관리",
+    "/operator": "대회 운영",
+}
+
+OPERATOR_PAGES = {
+    "": "대회 운영",
+    "settings": "대회 설정",
+    "operators": "운영자 관리",
+    "notices": "대회 공지",
+    "board": "대회 게시판",
+    "participants": "참가팀 관리",
+    "problems": "문제 관리",
+    "problem-review": "문제 모아보기",
+    "submissions": "제출 목록",
+    "scoreboard": "스코어보드",
+    "scoreboard/presentation": "프레젠테이션 스코어보드",
+    "audit-logs": "운영 로그",
+    "guide": "운영 가이드",
+}
+
+CONTEST_PAGES = {
+    "submissions": "채점현황",
+    "scoreboard": "스코어보드",
+    "board": "대회 게시판",
+}
+
+
 def _private_page_title(path: str) -> str | None:
     if re.fullmatch(r"/presentation/contests/[^/]+", path):
-        return "대회 프레젠테이션"
-    if path == "/login":
-        return "로그인"
-    if re.fullmatch(r"/admin(?:/(?:contests|judge|analytics|audit-logs|inquiries))?", path):
-        return "서비스 관리자"
-    if re.fullmatch(r"/operator(?:/contests/[^/]+(?:/(?:settings|operators|notices|board|participants|problems|problem-review|submissions|scoreboard(?:/presentation)?|audit-logs))?)?", path):
-        return "대회 운영"
-    if re.fullmatch(r"/contests/[^/]+/(?:submissions|scoreboard|board|problems(?:/[^/]+(?:/[^/]+)?)?)", path):
-        return "대회 참가"
+        return "프레젠테이션 스코어보드"
+    if path in PRIVATE_PAGES:
+        return PRIVATE_PAGES[path]
+    operator = re.fullmatch(r"/operator/contests/[^/]+(?:/(.+))?", path)
+    if operator:
+        return OPERATOR_PAGES.get(operator.group(1) or "")
+    contest = re.fullmatch(r"/contests/[^/]+/(.+)", path)
+    if not contest:
+        return None
+    section = contest.group(1)
+    if section in CONTEST_PAGES:
+        return CONTEST_PAGES[section]
+    if section == "problems":
+        return "문제집"
+    problem = re.fullmatch(r"problems/[^/]+(?:/([^/]+))?", section)
+    if problem:
+        return {"submit": "코드 제출", "editorial": "해설"}.get(problem.group(1), "문제 보기")
     return None
 
 
@@ -314,7 +356,7 @@ def build_page_metadata(requested_path: str) -> dict:
         title = plain_text(notice.title, 120) or "공지사항"
         summary = plain_text(notice.summary, 160)
         body = plain_text(notice.body, 12000)
-        metadata = _page(path, title + " | ZOJ 공지사항", title,
+        metadata = _page(path, title + " | ZOJ", title,
                          summary or plain_text(notice.body, 160) or "ZOJ 서비스 공지사항입니다.",
                          [text for text in [summary, body] if text],
                          breadcrumbs=[("/notices", "공지사항"), (path, title)])

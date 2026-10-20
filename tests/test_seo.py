@@ -153,7 +153,7 @@ def test_metadata_and_sitemap_follow_publish_unpublish_and_notice_edits(public_c
     notice = store.create_service_notice("SEO 공지", "공개 요약", "공지 본문입니다.")
     notice_path = f"/notices/{notice.service_notice_id}"
     assert "https://zoj.kr" + notice_path in sitemap_locations()
-    assert build_page_metadata(notice_path)["title"] == "SEO 공지 | ZOJ 공지사항"
+    assert build_page_metadata(notice_path)["title"] == "SEO 공지 | ZOJ"
     store.update_service_notice(notice.service_notice_id, title="수정된 SEO 공지", summary="변경된 요약")
     assert build_page_metadata(notice_path)["description"] == "변경된 요약"
     assert build_page_metadata(notice_path)["title"].startswith("수정된 SEO 공지")
@@ -163,17 +163,24 @@ def test_metadata_and_sitemap_follow_publish_unpublish_and_notice_edits(public_c
     assert "https://zoj.kr" + notice_path not in sitemap_locations()
 
 
-@pytest.mark.parametrize("path", [
-    "/login", "/admin", "/admin/contests", "/admin/analytics", "/operator", "/operator/contests/any-id/settings",
-    "/operator/contests/any-id/scoreboard/presentation", "/contests/any-id/problems",
-    "/contests/any-id/problems/problem-id/editorial", "/contests/any-id/submissions",
-    "/contests/any-id/scoreboard", "/contests/any-id/board",
+@pytest.mark.parametrize("path,expected_title", [
+    ("/login", "로그인"), ("/admin", "관리자 콘솔"), ("/admin/contests", "대회 관리"),
+    ("/admin/analytics", "운영 통계"), ("/operator", "대회 운영"),
+    ("/operator/contests/any-id/settings", "대회 설정"),
+    ("/operator/contests/any-id/guide", "운영 가이드"),
+    ("/operator/contests/any-id/scoreboard/presentation", "프레젠테이션 스코어보드"),
+    ("/contests/any-id/problems", "문제집"),
+    ("/contests/any-id/problems/problem-id/editorial", "해설"),
+    ("/contests/any-id/problems/problem-id/submit", "코드 제출"),
+    ("/contests/any-id/submissions", "채점현황"),
+    ("/contests/any-id/scoreboard", "스코어보드"), ("/contests/any-id/board", "대회 게시판"),
 ])
-def test_authenticated_and_contest_resource_pages_are_not_indexed(path, monkeypatch):
+def test_authenticated_and_contest_resource_pages_are_not_indexed(path, expected_title, monkeypatch):
     def forbidden_lookup(*args, **kwargs):
         raise AssertionError("Private metadata must not look up contest/account content")
     monkeypatch.setattr(store, "get_public_contest", forbidden_lookup)
     metadata = build_page_metadata(path)
+    assert metadata["title"] == expected_title + " | ZOJ"
     assert metadata["status_code"] == 200
     assert metadata["robots"] == "noindex, nofollow"
     assert metadata["structured_data"] == []
