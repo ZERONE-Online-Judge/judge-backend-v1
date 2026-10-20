@@ -133,7 +133,7 @@ def test_authenticated_audience_and_reports_require_real_service_master():
     assert any(row.audience == 'anonymous' for row in events())
 
 
-def test_participant_and_preview_identity_are_distinct():
+def test_participant_and_operator_with_preview_permission_are_distinct():
     contest = next(iter(store.contests.values()))
     participant = client.post(f'/api/contests/{contest.contest_id}/participant-login/otp/verify', json={'email':'test1@zoj.com','otp_code':'','force_new_session':True}).json()['data']
     client.post('/api/public/usage', json=payload(path=f'/contests/{contest.contest_id}'), headers=auth(participant['access_token']))
@@ -141,7 +141,7 @@ def test_participant_and_preview_identity_are_distinct():
     account = store.upsert_contest_operator(contest.contest_id, f'preview-{uuid4().hex}@zoj.com', 'Preview', ['participant_preview'])
     preview = login(str(account.email))
     client.post('/api/public/usage', json=payload(path=f'/contests/{contest.contest_id}/problems'), headers=auth(preview['access_token']))
-    assert any(row.audience == 'preview' for row in events())
+    assert any(row.audience == 'operator' for row in events())
 
 
 def add_event(when, visitor, visit, *, cid=None, service='public', audience='anonymous', page='public.home', seconds=0):

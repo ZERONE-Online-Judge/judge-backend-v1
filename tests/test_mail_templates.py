@@ -208,7 +208,7 @@ def test_operator_assignment_retains_role_schedule_and_link(starts_at):
     (["problem_author", "settings_manager"], "출제진", "/operator/contests/"),
     (["notices_manager"], "운영진", "/operator/contests/"),
     (["problem_reviewer"], "검수진", "/operator/contests/"),
-    (["participant_preview"], "미리보기", "/contests/"),
+    (["participant_preview"], "운영진", "/operator/contests/"),
 ])
 def test_operator_assignment_mail_links_to_accessible_role_route(
     roles, role_title, path_prefix, isolated_store, monkeypatch
@@ -236,13 +236,8 @@ def test_operator_assignment_mail_links_to_accessible_role_route(
         attrs["href"] for tag, attrs in ParsedMail(item.body_html).elements
         if tag == "a" and "href" in attrs
     ]
-    if roles == ["participant_preview"]:
-        destination = next(url for url in destinations if urlsplit(url).path == "/login")
-        assert parse_qs(urlsplit(destination).query) == {"moveTo": [expected_path]}
-        assert destination.startswith("https://zoj.kr/")
-    else:
-        destination = f"https://zoj.kr{expected_path}"
-        assert destination in destinations
+    destination = f"https://zoj.kr{expected_path}"
+    assert destination in destinations
     assert destination in item.body_text
 
 

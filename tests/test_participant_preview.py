@@ -57,23 +57,52 @@ def real_running(c):
     store.update_contest_settings(c["cid"], status=ContestStatus.RUNNING, start_at=now_utc() - timedelta(hours=1), end_at=now_utc() + timedelta(hours=2), freeze_at=now_utc() + timedelta(hours=1))
 
 
-def test_preview_role_is_exclusive_and_does_not_open_operator_routes(preview):
+def test_preview_is_an_operator_permission_that_combines_with_other_roles(preview):
     c = preview
     master = general_login("test3@zoj.com")
     endpoint = f"/api/operator/contests/{c['cid']}/operators"
-    for other in ["master", "problem_reviewer", "notices_manager"]:
-        response = client.post(endpoint, headers=headers(master), json={"email": f"mixed-{uuid4().hex}@zoj.com", "display_name": "Invalid", "roles": ["participant_preview", other]})
-        assert response.status_code == 422
+    response = client.post(endpoint, headers=headers(master), json={"email": f"mixed-{uuid4().hex}@zoj.com", "display_name": "Combined operator", "roles": ["participant_preview", "notices_manager"]})
+    assert response.status_code == 200, response.text
+    combined = general_login(response.json()["data"]["email"])
+    assert client.get(c["auth"] + "/participant-preview", headers=headers(combined)).status_code == 200
+    assert client.get(endpoint, headers=headers(combined)).status_code == 403
     scopes = c["sessions"][0]["operator_session"]["staff"]["contest_scopes"][c["cid"]]
-    assert scopes == ["contest.participant.preview"]
-    for path in ["/dashboard", "/divisions", "/problems", "/participants", "/submissions", "/scoreboard/internal", "/notices", "/boards", "/audit-logs"]:
+    assert set(scopes) == {"contest.view", "contest.participant.preview"}
+    for path in ["/dashboard", "/divisions"]:
+        assert client.get(f"/api/operator/contests/{c['cid']}" + path, headers=headers(c["sessions"][0])).status_code == 200
+    for path in ["/problems", "/participants", "/submissions", "/scoreboard/internal", "/notices", "/boards", "/audit-logs"]:
         assert client.get(f"/api/operator/contests/{c['cid']}" + path, headers=headers(c["sessions"][0])).status_code == 403
-    assert client.get("/api/operator/contests", headers=headers(c["sessions"][0])).json()["data"] == []
-    # The service master and an ordinary reviewer must not silently become a
-    # participant preview identity through their wildcard or problem permissions.
-    assert client.get(c["auth"] + "/participant-preview", headers=headers(master)).status_code == 403
+    assert c["cid"] in {item["contest_id"] for item in client.get("/api/operator/contests", headers=headers(c["sessions"][0])).json()["data"]}
+    assert client.get(c["auth"] + "/participant-preview", headers=headers(master)).status_code == 200
+    # A permission grant alone does not select a participant identity.
+    assert client.get(c["base"] + "/participant-session/me", headers=headers(master)).status_code == 401
     account = store.upsert_contest_operator(c["cid"], f"review-{uuid4().hex}@zoj.com", "Reviewer", ["problem_reviewer"])
     assert client.post(c["auth"] + "/participant-preview-session", headers=headers(general_login(str(account.email))), json={"division_id": c["divisions"][0].division_id}).status_code == 403
+
+
+def test_combining_roles_keeps_preview_selection_and_operator_access(preview):
+    c = preview
+    select_division(c)
+    account = c["accounts"][0]
+    store.update_contest_operator(c["cid"], str(account.email), "Combined", ["participant_preview", "notices_manager"])
+    token = headers(c["sessions"][0])
+    assert client.get(c["base"] + "/participant-session/me", headers=token).status_code == 200
+    assert client.get(f"/api/operator/contests/{c['cid']}/notices", headers=token).status_code == 200
+    assert client.get(f"/api/operator/contests/{c['cid']}/participants", headers=token).status_code == 403
+
+
+def test_legacy_preview_assignment_can_open_operator_home_without_data_migration(preview):
+    import json
+    from app.orm_models import StaffAccountRow
+    c = preview
+    with store._session() as db:
+        row = db.get(StaffAccountRow, c["accounts"][0].staff_account_id)
+        row.contest_scopes = json.dumps({c["cid"]: ["contest.participant.preview"]})
+        db.commit()
+    token = headers(c["sessions"][0])
+    assert client.get(f"/api/operator/contests/{c['cid']}/dashboard", headers=token).status_code == 200
+    assert c["cid"] in {item["contest_id"] for item in client.get("/api/operator/contests", headers=token).json()["data"]}
+    assert client.get(c["auth"] + "/participant-preview", headers=token).status_code == 200
 
 
 def test_precontest_real_routes_and_division_switch_without_real_team_creation(preview):
@@ -160,7 +189,7 @@ def test_preview_submission_runs_real_judge_without_official_submission_or_score
     operator_base = f"/api/operator/contests/{c['cid']}/submissions"
     listed = client.get(operator_base, headers=headers(master)).json()["data"]
     assert [item["submission_id"] for item in listed] == [sid]
-    assert listed[0]["submitted_by_title"] == "미리보기"
+    assert listed[0]["submitted_by_title"] == "운영진"
     assert listed[0]["source_code"] is None
     detail = client.get(operator_base + "/" + sid, headers=headers(master))
     assert detail.status_code == 200

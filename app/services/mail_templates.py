@@ -214,7 +214,7 @@ def operator_assignment_mail(
             eyebrow="대회 운영진 초대",
             body=body,
             meta=meta,
-            button_label="대회 페이지 열기" if role_label == "참가자 미리보기" else "운영 화면 열기",
+            button_label="운영 화면 열기",
             button_url=console_url,
         ),
     )

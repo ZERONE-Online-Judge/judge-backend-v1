@@ -16,7 +16,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
     "scoreboard_manager": {"contest.scoreboard.view", "contest.scoreboard.manage", "contest.scoreboard.freeze", "contest.scoreboard.unfreeze", "contest.scoreboard.setting"},
     "problem_author": {"contest.problem.view", "contest.problem.manage", "contest.problem.review", "contest.problem.test", "contest.problem.create", "contest.problem.update", "contest.problem.delete", "contest.problem.reorder", "contest.problem.resource.view", "contest.problem.resource.manage", "contest.testcase.view", "contest.testcase.manage", "contest.generator.view", "contest.generator.manage"},
     "problem_reviewer": {"contest.problem.view", "contest.problem.review", "contest.problem.test"},
-    "participant_preview": {"contest.participant.preview"},
+    "participant_preview": {"contest.view", "contest.participant.preview"},
 }
 
 
@@ -24,8 +24,8 @@ def validate_roles(roles: list[str]) -> list[str]:
     if not roles or any(role not in ROLE_PERMISSIONS for role in roles):
         raise ValueError("하나 이상의 올바른 권한을 선택해야 합니다.")
     roles = list(dict.fromkeys(roles))
-    if any(role in {"owner", "master", "participant_preview"} for role in roles) and len(roles) != 1:
-        raise ValueError("대회 총괄, 마스터와 참가자 미리보기는 각각 단독 권한입니다.")
+    if any(role in {"owner", "master"} for role in roles) and len(roles) != 1:
+        raise ValueError("대회 총괄과 마스터는 각각 단독 권한입니다.")
     return roles
 
 
@@ -35,8 +35,6 @@ def permissions_for_roles(roles: list[str]) -> list[str]:
         return ["contest.*", "contest.owner"]
     if roles == ["master"]:
         return ["contest.*"]
-    if roles == ["participant_preview"]:
-        return ["contest.participant.preview"]
     return sorted({"contest.view"}.union(*(ROLE_PERMISSIONS[role] for role in roles)))
 
 
@@ -47,6 +45,8 @@ def roles_for_scopes(scopes: list[str]) -> list[str]:
     if "contest.*" in scopes:
         return ["master"]
     permissions_set = set(scopes)
+    if "contest.participant.preview" in permissions_set:
+        permissions_set.add("contest.view")
     if "contest.problem.review" in permissions_set:
         permissions_set.add("contest.problem.view")
     return [role for role, permissions in ROLE_PERMISSIONS.items() if permissions <= permissions_set]
@@ -61,8 +61,6 @@ def title_for_roles(roles: list[str]) -> str | None:
         return "출제진"
     if "problem_reviewer" in roles:
         return "검수진"
-    if "participant_preview" in roles:
-        return "미리보기"
     return "운영진" if any(role in ROLE_PERMISSIONS for role in roles) else None
 
 
@@ -77,11 +75,9 @@ def title_for_scopes(scopes: list[str]) -> str | None:
         return "출제진"
     if any(scope in {"contest.problem.review", "contest.problem.test"} for scope in scopes):
         return "검수진"
-    non_operational = {"contest.view", "contest.problem.review", "contest.problem.test", "contest.participant.preview"}
+    non_operational = {"contest.view", "contest.problem.review", "contest.problem.test"}
     if any(scope.startswith("contest.") and scope not in non_operational for scope in scopes):
         return "운영진"
-    if "contest.participant.preview" in scopes:
-        return "미리보기"
     return "운영진" if "contest.view" in scopes else None
 
 

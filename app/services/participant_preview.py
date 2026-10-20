@@ -1,5 +1,4 @@
 """Participant-route previews without real teams, shared board posts or scoring."""
-import json
 from datetime import timezone
 
 from sqlalchemy import func, select
@@ -35,12 +34,12 @@ def _account_session(db, contest_id: str, access_token: str):
     if not session or _aware(session.access_expires_at) <= now_utc():
         return None
     account = db.scalar(select(StaffAccountRow).where(func.lower(StaffAccountRow.email) == session.email.lower()))
-    if not account or account.is_service_master:
+    if not account:
         return None
-    roles = json.loads(account.contest_roles or "{}").get(contest_id, [])
-    scopes = json.loads(account.contest_scopes or "{}").get(contest_id, [])
-    # Wildcard access must never silently enter a different participant identity.
-    if roles != [PREVIEW_KIND] or scopes != [PREVIEW_SCOPE]:
+    from app.services.authz import has_contest_permission
+    from app.services.store import _staff
+
+    if not has_contest_permission(_staff(account), contest_id, PREVIEW_SCOPE):
         return None
     return account, session
 

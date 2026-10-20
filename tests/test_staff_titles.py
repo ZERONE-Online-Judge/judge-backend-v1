@@ -17,15 +17,15 @@ from app.services.contest_roles import title_for_roles, title_for_scopes
 client = TestClient(app)
 
 
-def test_titles_cover_legacy_partial_permissions_and_exclusive_preview():
+def test_titles_cover_legacy_partial_permissions_and_operator_preview():
     assert title_for_scopes(["contest.*", "contest.problem.manage"]) == "마스터"
     assert title_for_scopes(["contest.testcase.manage", "contest.notice.view"]) == "출제진"
     assert title_for_scopes(["contest.notice.create", "contest.problem.review"]) == "검수진"
     assert title_for_scopes(["contest.view", "contest.problem.test"]) == "검수진"
     assert title_for_roles(["problems_viewer"]) == "운영진"
     assert title_for_scopes(["contest.view", "contest.problem.view"]) == "운영진"
-    assert title_for_roles(["participant_preview"]) == "미리보기"
-    assert title_for_scopes(["contest.participant.preview"]) == "미리보기"
+    assert title_for_roles(["participant_preview"]) == "운영진"
+    assert title_for_scopes(["contest.participant.preview"]) == "운영진"
     assert title_for_scopes([]) is None
 
 

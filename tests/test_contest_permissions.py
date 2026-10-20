@@ -63,10 +63,8 @@ def test_read_permission_matrix(context, role):
     }
     for path, permission in routes.items():
         response = client.get(c["prefix"] + path, headers=c["tokens"][role])
-        allowed = role in {"owner", "master"} or (permission is None and role != "participant_preview") or permission in permissions
+        allowed = role in {"owner", "master"} or permission is None or permission in permissions
         assert response.status_code == (200 if allowed else 403), (role, path, response.text)
-    if role == "participant_preview":
-        return
     dashboard = client.get(c["prefix"] + "/dashboard", headers=c["tokens"][role]).json()["data"]
     if role not in {"owner", "master", "staff_manager"}:
         assert dashboard["operators"] == []

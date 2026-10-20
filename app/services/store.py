@@ -606,16 +606,21 @@ def _question_for_view(
 
 
 def _staff(row: StaffAccountRow) -> StaffAccount:
+    scopes = json.loads(row.contest_scopes or "{}")
+    for values in scopes.values():
+        # Older preview-only assignments are now ordinary operator permissions.
+        if "contest.participant.preview" in values and "contest.view" not in values:
+            values.append("contest.view")
     return StaffAccount(
         staff_account_id=row.staff_account_id,
         email=row.email,
         display_name=row.display_name,
         is_service_master=row.is_service_master,
         permissions=[item for item in row.permissions.split(",") if item],
-        contest_scopes=json.loads(row.contest_scopes or "{}"),
+        contest_scopes=scopes,
         contest_roles={
-            contest_id: json.loads(row.contest_roles or "{}").get(contest_id, roles_for_scopes(scopes))
-            for contest_id, scopes in json.loads(row.contest_scopes or "{}").items()
+            contest_id: json.loads(row.contest_roles or "{}").get(contest_id, roles_for_scopes(scope_list))
+            for contest_id, scope_list in scopes.items()
         },
         protected_master_contests=json.loads(row.protected_master_contests or "[]"),
     )
@@ -1917,7 +1922,7 @@ class DbStore:
         operator_session = None
         if account:
             display_name = account.display_name or display_name
-            scopes = json.loads(account.contest_scopes or "{}")
+            scopes = _staff(account).contest_scopes
             for contest_id, scope_list in sorted(scopes.items()):
                 if not scope_list:
                     continue
@@ -2580,7 +2585,7 @@ class DbStore:
             if contest.owner_staff_account_id == account.staff_account_id:
                 roles = ["owner"]
                 permissions = permissions_for_roles(roles)
-            if selections.get(contest_id) == ["participant_preview"] and roles != ["participant_preview"]:
+            if not {"contest.*", "contest.participant.preview"}.intersection(permissions):
                 db.execute(delete(ParticipantPreviewSessionRow).where(ParticipantPreviewSessionRow.staff_account_id == account.staff_account_id, ParticipantPreviewSessionRow.contest_id == contest_id))
             scopes[contest_id] = permissions
             selections[contest_id] = roles
@@ -2628,7 +2633,7 @@ class DbStore:
                 participant_conflicts = self._contest_participant_email_conflicts(db, contest_id, [account.email])
                 if participant_conflicts:
                     raise AppError(409, "email_change_participant_identity", "이 이메일은 같은 대회의 참가자 계정에도 연결되어 있어 운영자 정보를 변경할 수 없습니다.")
-                if selections.get(contest_id) == ["participant_preview"] and roles != ["participant_preview"]:
+                if not {"contest.*", "contest.participant.preview"}.intersection(permissions):
                     db.execute(delete(ParticipantPreviewSessionRow).where(ParticipantPreviewSessionRow.staff_account_id == account.staff_account_id, ParticipantPreviewSessionRow.contest_id == contest_id))
                 scopes[contest_id] = permissions
                 selections[contest_id] = roles
@@ -2742,7 +2747,7 @@ class DbStore:
     def accessible_contests_for_staff(self, account: StaffAccount) -> list[Contest]:
         if account.is_service_master:
             return sorted(self.contests.values(), key=lambda item: item.start_at)
-        contest_ids = {contest_id for contest_id, scopes in account.contest_scopes.items() if any(scope != "contest.participant.preview" for scope in scopes)}
+        contest_ids = {contest_id for contest_id, scopes in account.contest_scopes.items() if scopes}
         contests = [contest for contest_id, contest in self.contests.items() if contest_id in contest_ids]
         return sorted(contests, key=lambda item: item.start_at)
 

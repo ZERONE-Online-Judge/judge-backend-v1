@@ -131,8 +131,6 @@ def authenticated_audience(db, token, contest_id):
         if staff.is_service_master:
             return "service_master", account_key
         scopes = json.loads(staff.contest_scopes or "{}")
-        if scopes.get(contest_id) == ["contest.participant.preview"]:
-            return "preview", account_key
         if any(scopes.values()):
             return "operator", account_key
     if db.scalar(select(TeamMemberRow.team_member_id).where(TeamMemberRow.email == email).limit(1)):

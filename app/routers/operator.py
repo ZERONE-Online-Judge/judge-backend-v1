@@ -6,7 +6,6 @@ from datetime import datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 from uuid import uuid4
-from urllib.parse import urlencode
 from typing import Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Request, UploadFile
@@ -782,10 +781,7 @@ def _enqueue_operator_assignment_mail(contest_id, operator, fallback_roles):
     contest = store.contests.get(contest_id)
     if contest:
         roles = operator.contest_roles.get(contest_id, fallback_roles)
-        console_path = f"/contests/{contest_id}" if "participant_preview" in roles else f"/operator/contests/{contest_id}"
-        if "participant_preview" in roles:
-            # Draft contests are intentionally unavailable through the public API.
-            console_path = "/login?" + urlencode({"moveTo": console_path})
+        console_path = f"/operator/contests/{contest_id}"
         content = operator_assignment_mail(
             contest_title=contest.title,
             organization_name=contest.organization_name,
