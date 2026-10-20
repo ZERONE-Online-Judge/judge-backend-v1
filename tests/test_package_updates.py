@@ -13,6 +13,7 @@ from app.orm_models import (ContestRow, ProblemRow, ProblemAssetRow, SubmissionR
                            TestcaseSetRow as CaseSetRow, OperationalAuditLogRow)
 from app.services import editor_library as transport
 from app.services.storage import object_storage
+from app.services.store import store
 from test_problem_archives import client, context, mutate_zip
 from test_editor_bridge import export, headers, email_for, config
 from test_editor_library import configuration, PID, JOB
@@ -117,6 +118,40 @@ def test_running_contest_requires_explicit_update_confirmation(context):
     preview=signed_preview(c,content).json()['data']; assert preview['contest_running']
     assert signed_apply(c,content,preview).status_code==409
     assert signed_apply(c,content,preview,confirm_running='true').status_code==200
+    notice = next(n for n in store.contest_notices.values() if n.contest_id == c['cid'])
+    assert notice.emergency and '잘못된 테스트 보강' in notice.body
+
+
+def test_operator_package_update_confirms_notice_before_applying(context, monkeypatch):
+    from app.services import editor_library as transport
+    c = context
+    content = package(c)
+    with SessionLocal() as db:
+        db.get(ContestRow, c['cid']).status = 'running'
+        db.commit()
+    view = signed_preview(c, content).json()['data']
+    sha = hashlib.sha256(content).hexdigest()
+    monkeypatch.setattr(transport, 'request_json', lambda *args: {'status':'completed', 'package':{'format':'zoj', 'verified':True, 'sha256':sha}})
+    @contextmanager
+    def download(*args):
+        yield io.BytesIO(content)
+    monkeypatch.setattr(transport, 'download_package', download)
+    body = {'job_id':JOB, 'target_problem_id':c['pid'], 'target_hash':view['target_hash'],
+        'archive_sha256':sha, 'reason':'테스트 보강', 'confirm_running':True}
+    path = c['prefix'] + f'/editor-problems/{PID}/updates'
+    first = client.post(path, headers=c['owner'], json=body)
+    assert first.status_code == 409, first.text
+    draft = first.json()['error']['details']
+    assert '제목' in draft['title'] and '2000' in draft['body']
+    assert store.problems[c['pid']].title != '수정한 문제'
+    assert not any(n.contest_id == c['cid'] for n in store.contest_notices.values())
+    approved = {**draft, 'title':'A번 문제 수정 안내', 'reason':'테스트 보강'}
+    saved = client.post(path, headers=c['owner'], json={**body, '_change_notice':approved})
+    assert saved.status_code == 200, saved.text
+    notice = next(n for n in store.contest_notices.values() if n.contest_id == c['cid'])
+    assert notice.title == approved['title'] and notice.emergency
+    assert client.post(path, headers=c['owner'], json={**body, '_change_notice':approved}).status_code == 200
+    assert len([n for n in store.contest_notices.values() if n.contest_id == c['cid']]) == 1
 
 
 def test_pending_rejudging_prevents_package_update(context):

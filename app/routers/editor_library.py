@@ -111,6 +111,7 @@ class Update(UpdatePreview):
     archive_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     reason: str = Field(min_length=1, max_length=1000)
     confirm_running: bool = False
+    change_notice: dict | None = Field(default=None, alias="_change_notice")
 
     @field_validator("reason")
     @classmethod
@@ -152,14 +153,15 @@ def apply_update(contest_id: str, request: Request, values: Update, problem_id: 
         raise AppError(409, "package_update_archive_changed", "패키지가 변경되었습니다. 변경 내용을 다시 확인하세요.")
     operation = package_updates.digest([email, contest_id, problem_id, values.job_id, values.target_problem_id, values.target_hash])
     context = {"email": email, "operation_key": operation,
-        "request_digest": package_updates.digest(values.model_dump()), "request_id": request.state.request_id,
+        "request_digest": package_updates.digest(values.model_dump(exclude={"change_notice"})), "request_id": request.state.request_id,
         "path": request.url.path,
         "source": {"problem_id": problem_id, "job_id": values.job_id, "revision": package.get("revision"), "sha256": sha}}
     _reserve()
     try:
         with transport.download_package(project_path(problem_id, values.job_id) + "/download", email, sha) as source:
             result = package_updates.apply(source, contest_id, values.target_problem_id, values.target_hash,
-                sha, values.reason, values.confirm_running, context)
+                sha, values.reason, values.confirm_running, context,
+                change_notice=values.change_notice, require_notice=True)
     finally:
         _archive_slots.release()
     request.state.package_update_audited = True

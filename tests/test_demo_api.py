@@ -22,6 +22,19 @@ from app.services.storage import object_storage
 client = TestClient(app)
 
 
+def patch_with_change_notice(path, **kwargs):
+    """Existing settings scenarios explicitly confirm the new notice step.
+
+    Rejection/cancellation and permission boundaries have dedicated tests in
+    test_change_notices.py; these scenarios still verify the final policies.
+    """
+    result = client.patch(path, **kwargs)
+    if result.status_code == 409 and result.json()["error"]["code"] == "change_notice_required":
+        approval = {**result.json()["error"]["details"], "reason": "운영 시간 조정"}
+        result = client.patch(path, **{**kwargs, "json": {**kwargs["json"], "_change_notice": approval}})
+    return result
+
+
 def register_judge_node(*, json):
     # Provision through the administrator path before testing agent reconnect.
     if not any(n.node_name == json["node_name"] for n in store.judge_nodes.values()):
@@ -786,7 +799,7 @@ def test_operator_mutations_are_locked_during_running_contest():
     assert problem_create.status_code == 409
     assert problem_create.json()["error"]["code"] == "contest_locked"
 
-    settings_update = client.patch(
+    settings_update = patch_with_change_notice(
         f"/api/operator/contests/{contest_id}/settings",
         headers=auth_headers(operator["access_token"]),
         json={"status": "ended"},
@@ -794,7 +807,7 @@ def test_operator_mutations_are_locked_during_running_contest():
     assert settings_update.status_code == 409
     assert settings_update.json()["error"]["code"] == "contest_locked"
 
-    emergency_update = client.patch(
+    emergency_update = patch_with_change_notice(
         f"/api/operator/contests/{contest_id}/settings",
         headers=auth_headers(operator["access_token"]),
         json={"emergency_notice": "Queue delay notice"},
@@ -802,7 +815,7 @@ def test_operator_mutations_are_locked_during_running_contest():
     assert emergency_update.status_code == 200
 
     now = datetime.now(timezone.utc)
-    time_update = client.patch(
+    time_update = patch_with_change_notice(
         f"/api/operator/contests/{contest_id}/settings",
         headers=auth_headers(operator["access_token"]),
         json={
@@ -833,7 +846,7 @@ def test_auto_time_notice_only_lists_changed_time_fields():
     set_contest_mutable(contest_id)
     contest = store.contests[contest_id]
 
-    update = client.patch(
+    update = patch_with_change_notice(
         f"/api/operator/contests/{contest_id}/settings",
         headers=headers,
         json={
@@ -931,7 +944,7 @@ def test_operator_setting_change_does_not_enqueue_email_notification():
     before_queue = client.get("/api/admin/mail-queue", headers=auth_headers(master["access_token"]))
     before_count = len([item for item in before_queue.json()["data"] if item["mail_type"] == "contest_settings_updated"])
 
-    updated = client.patch(
+    updated = patch_with_change_notice(
         f"/api/operator/contests/{contest_id}/settings",
         headers=auth_headers(operator["access_token"]),
         json={"emergency_notice": "Delayed queue update"},
@@ -1691,7 +1704,7 @@ def test_public_contest_resources_can_be_viewed_without_participant_during_conte
     operator = staff_tokens("test4@zoj.com")
     headers = auth_headers(operator["access_token"])
 
-    updated = client.patch(
+    updated = patch_with_change_notice(
         f"/api/operator/contests/{contest_id}/settings",
         headers=headers,
         json={
@@ -1711,7 +1724,7 @@ def test_public_contest_resources_can_be_viewed_without_participant_during_conte
         assert client.get(f"/api/contests/{contest_id}/boards").status_code == 200
         assert client.get(f"/api/contests/{contest_id}/notices").status_code == 200
     finally:
-        restored = client.patch(
+        restored = patch_with_change_notice(
             f"/api/operator/contests/{contest_id}/settings",
             headers=headers,
             json={
@@ -1734,7 +1747,7 @@ def test_public_contest_resources_can_be_viewed_without_participant_after_end():
     headers = auth_headers(operator["access_token"])
     now = datetime.now(timezone.utc)
 
-    updated = client.patch(
+    updated = patch_with_change_notice(
         f"/api/operator/contests/{contest_id}/settings",
         headers=headers,
         json={
@@ -1763,7 +1776,7 @@ def test_public_contest_resources_can_be_viewed_without_participant_after_end():
             json={"title": "종료 후 질문", "body": "차단", "visibility": "public"},
         )
         assert blocked_question.status_code == 404
-        write_enabled = client.patch(
+        write_enabled = patch_with_change_notice(
             f"/api/operator/contests/{contest_id}/settings",
             headers=headers,
             json={"board_write_after_end": True},
@@ -1782,7 +1795,7 @@ def test_public_contest_resources_can_be_viewed_without_participant_after_end():
         )
         assert allowed_answer.status_code == 200
     finally:
-        restored = client.patch(
+        restored = patch_with_change_notice(
             f"/api/operator/contests/{contest_id}/settings",
             headers=headers,
             json={
@@ -1884,7 +1897,7 @@ def test_mock_judging_after_end_is_separate_from_public_submission_list():
     problem = next(item for item in store.problems.values() if item.contest_id == contest_id)
     now = datetime.now(timezone.utc)
 
-    updated = client.patch(
+    updated = patch_with_change_notice(
         f"/api/operator/contests/{contest_id}/settings",
         headers=headers,
         json={
@@ -1929,7 +1942,7 @@ def test_mock_judging_after_end_is_separate_from_public_submission_list():
         assert operator_item["submission_kind"] == "mock_judging"
         assert operator_item["participant_team_id"] is None
 
-        private_again = client.patch(
+        private_again = patch_with_change_notice(
             f"/api/operator/contests/{contest_id}/settings",
             headers=headers,
             json={"problem_access_after_end": "private", "mock_judging_enabled": True},
@@ -1937,7 +1950,7 @@ def test_mock_judging_after_end_is_separate_from_public_submission_list():
         assert private_again.status_code == 200
         assert private_again.json()["data"]["mock_judging_enabled"] is False
     finally:
-        restored = client.patch(
+        restored = patch_with_change_notice(
             f"/api/operator/contests/{contest_id}/settings",
             headers=headers,
             json={
@@ -1999,7 +2012,7 @@ def test_public_contest_resources_use_manual_ended_status_even_when_end_time_is_
     now = datetime.now(timezone.utc)
     set_contest_mutable(contest_id)
 
-    updated = client.patch(
+    updated = patch_with_change_notice(
         f"/api/operator/contests/{contest_id}/settings",
         headers=headers,
         json={
@@ -2028,7 +2041,7 @@ def test_public_contest_resources_use_manual_ended_status_even_when_end_time_is_
         assert client.get(f"/api/contests/{contest_id}/notices").status_code == 200
     finally:
         set_contest_mutable(contest_id)
-        restored = client.patch(
+        restored = patch_with_change_notice(
             f"/api/operator/contests/{contest_id}/settings",
             headers=headers,
             json={
@@ -2062,7 +2075,7 @@ def test_public_notice_access_after_end_includes_participant_visible_notices():
     assert created_notice.status_code == 200
 
     try:
-        updated = client.patch(
+        updated = patch_with_change_notice(
             f"/api/operator/contests/{contest_id}/settings",
             headers=headers,
             json={
@@ -2142,7 +2155,7 @@ def test_operator_can_manually_override_public_scoreboard_freeze_mode():
     operator = staff_tokens("test4@zoj.com")
     headers = auth_headers(operator["access_token"])
 
-    frozen = client.patch(
+    frozen = patch_with_change_notice(
         f"/api/operator/contests/{contest_id}/settings",
         headers=headers,
         json={"scoreboard_freeze_mode": "frozen"},
@@ -2156,7 +2169,7 @@ def test_operator_can_manually_override_public_scoreboard_freeze_mode():
     assert public_state.status_code == 200
     assert public_state.json()["data"]["frozen_public_view"] is True
 
-    live = client.patch(
+    live = patch_with_change_notice(
         f"/api/operator/contests/{contest_id}/settings",
         headers=headers,
         json={"scoreboard_freeze_mode": "live"},
@@ -2170,7 +2183,7 @@ def test_operator_can_manually_override_public_scoreboard_freeze_mode():
     assert public_state.status_code == 200
     assert public_state.json()["data"]["frozen_public_view"] is False
 
-    restored = client.patch(
+    restored = patch_with_change_notice(
         f"/api/operator/contests/{contest_id}/settings",
         headers=headers,
         json={"scoreboard_freeze_mode": "auto"},
@@ -2183,7 +2196,7 @@ def test_operator_presentation_scoreboard_uses_public_freeze_view():
     operator = staff_tokens("test4@zoj.com")
     headers = auth_headers(operator["access_token"])
 
-    frozen = client.patch(
+    frozen = patch_with_change_notice(
         f"/api/operator/contests/{contest_id}/settings",
         headers=headers,
         json={"scoreboard_freeze_mode": "frozen"},
@@ -2202,7 +2215,7 @@ def test_operator_presentation_scoreboard_uses_public_freeze_view():
     assert all("problems" in section for section in data["sections"])
     assert all(section["frozen"] is True for section in data["sections"])
 
-    restored = client.patch(
+    restored = patch_with_change_notice(
         f"/api/operator/contests/{contest_id}/settings",
         headers=headers,
         json={"scoreboard_freeze_mode": "auto"},
@@ -2241,7 +2254,7 @@ def test_operator_updates_contest_settings_and_public_after_end_policy():
     assert patched_problem.status_code == 200
     assert patched_problem.json()["data"]["editorial"] == editorial
 
-    updated = client.patch(
+    updated = patch_with_change_notice(
         f"/api/operator/contests/{contest_id}/settings",
         headers=auth_headers(operator["access_token"]),
         json={
@@ -2266,7 +2279,7 @@ def test_operator_updates_contest_settings_and_public_after_end_policy():
     assert public_problem.status_code == 200
     assert public_problem.json()["data"]["editorial"] == editorial
 
-    private_editorial = client.patch(
+    private_editorial = patch_with_change_notice(
         f"/api/operator/contests/{contest_id}/settings",
         headers=auth_headers(operator["access_token"]),
         json={"editorial_access_after_end": "private"},
@@ -2276,7 +2289,7 @@ def test_operator_updates_contest_settings_and_public_after_end_policy():
     assert hidden_problem.status_code == 200
     assert hidden_problem.json()["data"]["editorial"] == ""
 
-    invalid = client.patch(
+    invalid = patch_with_change_notice(
         f"/api/operator/contests/{contest_id}/settings",
         headers=auth_headers(operator["access_token"]),
         json={"start_at": end_at.isoformat(), "end_at": start_at.isoformat()},
@@ -2286,7 +2299,7 @@ def test_operator_updates_contest_settings_and_public_after_end_policy():
     restore_start = now - timedelta(hours=1)
     restore_end = now + timedelta(hours=3)
     restore_freeze = now + timedelta(hours=2)
-    restored = client.patch(
+    restored = patch_with_change_notice(
         f"/api/operator/contests/{contest_id}/settings",
         headers=auth_headers(operator["access_token"]),
         json={
@@ -2313,7 +2326,7 @@ def test_contest_status_is_normalized_from_schedule_updates():
     future_freeze = future_start + timedelta(hours=3)
     future_end = future_start + timedelta(hours=4)
 
-    future = client.patch(
+    future = patch_with_change_notice(
         f"/api/operator/contests/{contest_id}/settings",
         headers=auth_headers(operator["access_token"]),
         json={
@@ -2329,7 +2342,7 @@ def test_contest_status_is_normalized_from_schedule_updates():
     running_start = now - timedelta(minutes=10)
     running_freeze = now + timedelta(hours=1)
     running_end = now + timedelta(hours=2)
-    running = client.patch(
+    running = patch_with_change_notice(
         f"/api/operator/contests/{contest_id}/settings",
         headers=auth_headers(operator["access_token"]),
         json={
@@ -2355,7 +2368,7 @@ def test_operator_schedule_update_auto_adjusts_end_and_freeze_when_only_start_is
     duration = old_end - old_start
 
     moved_start = old_end + timedelta(hours=2)
-    updated = client.patch(
+    updated = patch_with_change_notice(
         f"/api/operator/contests/{contest_id}/settings",
         headers=auth_headers(operator["access_token"]),
         json={
@@ -2521,7 +2534,7 @@ def test_private_participant_invites_are_sent_when_contest_becomes_public():
     assert not any(item["mail_type"] == "participant_invited" and item["recipient_email"] == leader_email for item in mail_queue.json()["data"])
 
     now = datetime.now(timezone.utc)
-    opened = client.patch(
+    opened = patch_with_change_notice(
         f"/api/operator/contests/{contest_id}/settings",
         headers=auth_headers(operator["access_token"]),
         json={
@@ -2543,7 +2556,7 @@ def test_due_contest_reminders_enqueue_html_mail_once():
     operator = staff_tokens("test4@zoj.com")
     master = staff_tokens()
     now = datetime.now(timezone.utc)
-    updated = client.patch(
+    updated = patch_with_change_notice(
         f"/api/operator/contests/{contest_id}/settings",
         headers=auth_headers(operator["access_token"]),
         json={
@@ -3014,7 +3027,7 @@ def test_submission_progress_is_updated_during_judging():
 def test_participant_progress_can_be_hidden_by_contest_setting():
     contest_id, login = participant_login()
     operator = staff_tokens("test4@zoj.com")
-    hidden = client.patch(
+    hidden = patch_with_change_notice(
         f"/api/operator/contests/{contest_id}/settings",
         headers=auth_headers(operator["access_token"]),
         json={
@@ -3067,7 +3080,7 @@ def test_participant_progress_can_be_hidden_by_contest_setting():
     assert waited.json()["data"]["progress_percent"] is None
     assert waited.json()["data"]["queue_position"] is None
 
-    restored = client.patch(
+    restored = patch_with_change_notice(
         f"/api/operator/contests/{contest_id}/settings",
         headers=auth_headers(operator["access_token"]),
         json={"participant_progress_visible": True},

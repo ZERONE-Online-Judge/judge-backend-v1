@@ -4,8 +4,44 @@ from contextvars import ContextVar
 from functools import wraps
 
 from app.database import SessionLocal
+from sqlalchemy.orm import Session, sessionmaker
 
 _current = ContextVar("request_database_session", default=None)
+
+
+class _AtomicSession(Session):
+    """Legacy store commits become flushes inside a single change request."""
+
+    def commit(self):
+        self.flush()
+
+
+@contextmanager
+def atomic_request_database():
+    factory = sessionmaker(class_=_AtomicSession, **SessionLocal.kw)
+    with factory() as session:
+        token = _current.set(session)
+        try:
+            yield session
+            Session.commit(session)
+            for callback in session.info.get("after_commit", []):
+                try:
+                    callback()
+                except Exception:
+                    pass  # File cleanup is best effort, as in the store.
+        except BaseException:
+            session.rollback()
+            raise
+        finally:
+            _current.reset(token)
+
+
+def after_commit(callback):
+    session = _current.get()
+    if isinstance(session, _AtomicSession):
+        session.info.setdefault("after_commit", []).append(callback)
+    else:
+        callback()
 
 
 @contextmanager

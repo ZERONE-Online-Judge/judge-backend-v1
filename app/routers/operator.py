@@ -16,6 +16,7 @@ from app.models import ContestResourceAccess, ContestStatus, ContestVisibility, 
 from app.services.authz import has_contest_permission, is_contest_master, require_contest_staff, require_staff
 from app.services.access_logging import write_access_log
 from app.services.automatic_notices import time_update_notice_body
+from app.services.change_notices import ChangeNoticeRoute, allows_live_problem_change, confirm_change
 from app.services.contest_roles import ContestOperatorCreateRequest, ContestOperatorUpdateRequest, title_for_roles
 from app.services.errors import AppError, not_found, permission_denied
 from app.services.mail_templates import absolute_url, operator_assignment_mail, render_branded_email
@@ -27,7 +28,7 @@ from app.services.store import SERVICE_MASTER_OPERATOR_ERROR, _schedule_status, 
 from app.services.storage import object_storage
 from app.services.testcase_verifier import UploadedTestcase, build_verified_testcase_set, verify_active_testcases_with_candidate_asset
 
-router = APIRouter(tags=["operator"])
+router = APIRouter(tags=["operator"], route_class=ChangeNoticeRoute)
 
 
 @router.get("/operator/contests/{contest_id}/mail-logs/{mail_id}/preview")
@@ -384,9 +385,11 @@ def _division_code_from_name(name: str) -> str:
 
 
 def _require_contest_mutation_open(contest_id: str):
-    contest = store.contests.get(contest_id)
+    contest = store.get_contest(contest_id)
     if not contest:
         raise not_found()
+    if allows_live_problem_change(contest_id):
+        return contest
     now = now_utc()
     in_time_window = contest.status not in {ContestStatus.DRAFT, ContestStatus.SCHEDULE_TBD} and contest.start_at <= now < contest.end_at and contest.status not in {
         ContestStatus.ENDED,
@@ -621,7 +624,7 @@ async def delete_division(contest_id: str, division_id: str, request: Request):
 @router.patch("/operator/contests/{contest_id}/settings")
 async def update_contest_settings(contest_id: str, payload: ContestSettingsUpdateRequest, request: Request):
     account = require_contest_staff(request, contest_id)
-    contest = store.contests.get(contest_id)
+    contest = store.get_contest(contest_id)
     if not contest:
         raise not_found()
     updates = payload.model_dump(exclude_unset=True)
@@ -687,15 +690,16 @@ async def update_contest_settings(contest_id: str, payload: ContestSettingsUpdat
         if key in updates and getattr(contest, key) != updates[key]
     ]
     auto_notice = time_update_notice_body(contest.title, changed_time_fields)
+    current_status = _schedule_status(contest.status, contest.start_at, contest.end_at, now_utc())
     next_status = _schedule_status(updates.get("status") or contest.status, start_at, end_at, now_utc())
     announce_time_change = (
         bool(auto_notice)
-        and settings.feature_emergency_notice_auto
-        and next_status in {ContestStatus.OPEN, ContestStatus.RUNNING}
+        and (current_status in {ContestStatus.OPEN, ContestStatus.RUNNING}
+             or next_status in {ContestStatus.OPEN, ContestStatus.RUNNING})
     )
     if announce_time_change:
-        manual_notice = updates.get("emergency_notice")
-        updates["emergency_notice"] = f"{auto_notice}\n\n{manual_notice}".strip() if manual_notice else auto_notice
+        await confirm_change(request, contest, "대회 일정 변경", auto_notice, contest.model_dump(mode="json"))
+        updates["emergency_notice"] = request.state.change_notice[2]
     try:
         updated = store.update_contest_settings(contest_id, **updates)
     except ValueError as error:
@@ -704,40 +708,6 @@ async def update_contest_settings(contest_id: str, payload: ContestSettingsUpdat
         raise not_found()
     if not store._contest_accepts_participant_invites(contest.status.value) and store._contest_accepts_participant_invites(updated.status.value):
         store.enqueue_participant_invites_for_contest(contest_id)
-    changed_lines = []
-    for key, new_value in updates.items():
-        old_value = getattr(contest, key)
-        if old_value == new_value:
-            continue
-        changed_lines.append(f"- {key}: {old_value} -> {new_value}")
-    if changed_lines:
-        if announce_time_change:
-            store.create_contest_notice(
-                contest_id,
-                "대회 일정 변경",
-                updates["emergency_notice"],
-                pinned=True,
-                emergency=True,
-                visibility="participants",
-                created_by_email=str(account.email),
-            )
-        # Settings changes can happen repeatedly during live operations.
-        # Keep the in-app audit log as the source of truth and avoid
-        # sending high-volume operator emails for every settings edit.
-        # store.notify_contest_operators(
-        #     contest_id,
-        #     "contest_settings_updated",
-        #     f"[ZOJ] {updated.title} settings updated",
-        #     "\n".join(
-        #         [
-        #             f"Contest: {updated.title}",
-        #             f"Changed by: {account.display_name} <{account.email}>",
-        #             "",
-        #             "Updated fields:",
-        #             *changed_lines,
-        #         ]
-        #     ),
-        # )
     return ok(request, updated.model_dump(mode="json"))
 
 

@@ -435,6 +435,7 @@ def import_archive(source, contest_id: str, division_id: str, problem_code: str,
                 from app.services import package_updates
                 problem = package_updates.target(db, contest_id, update_context['problem_id'], lock=True)
                 package_updates.check_update(db, contest, problem, update_context)
+                update_notice = package_updates.update_notice(contest, problem, manifest, update_context)
                 if not any(s.is_active and s.testcases for s in manifest.testcase_sets):
                     raise AppError(409, 'package_update_no_tests', '활성 테스트가 있는 패키지를 선택하세요.')
                 pid = problem.problem_id
@@ -527,6 +528,10 @@ def import_archive(source, contest_id: str, division_id: str, problem_code: str,
                             "target": {"problem_title": problem.title, "problem_code": code},
                             "division_id": division_id, "testcase_count": sum(len(s.testcases) for s in manifest.testcase_sets),
                             **({"reason": update_context['reason'], "backup_key": backup_key, "previous_target_hash": update_context['target_hash'], "editor": editor_context.get('source', {})} if update_context else {})}, ensure_ascii=False)))
+            if update_context and update_notice:
+                from app.services.store import store
+                store.create_contest_notice(contest_id, *update_notice, pinned=True, emergency=True,
+                    visibility="participants", created_by_email=str(account.email), session=db)
             db.commit()
             committed = True
             return Problem(**{field: getattr(problem, field) for field in Problem.model_fields}).model_dump(mode='json')

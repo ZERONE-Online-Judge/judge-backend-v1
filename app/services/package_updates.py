@@ -132,7 +132,7 @@ def preview(source, contest_id, problem_id):
 
 
 def apply(source, contest_id, problem_id, expected_target_hash, expected_archive_sha256,
-          reason, confirm_running, editor_context):
+          reason, confirm_running, editor_context, *, change_notice=None, require_notice=False):
     from app.services.problem_archive import import_archive
     if archive_sha(source) != expected_archive_sha256:
         raise AppError(409, "package_update_archive_changed", "확인한 패키지가 변경되었습니다. 변경 내용을 다시 확인하세요.")
@@ -141,7 +141,34 @@ def apply(source, contest_id, problem_id, expected_target_hash, expected_archive
         division, code = problem.division_id, problem.problem_code
     return import_archive(source, contest_id, division, code, editor_context=editor_context,
         update_context={"problem_id": problem_id, "target_hash": expected_target_hash,
-                        "reason": reason, "confirm_running": confirm_running})
+                        "reason": reason, "confirm_running": confirm_running,
+                        "archive_hash": expected_archive_sha256,
+                        "change_notice": change_notice, "require_notice": require_notice})
+
+
+def update_notice(contest, problem, manifest, values):
+    if not running(contest):
+        return None
+    from app.services.change_notices import _brief, validate_confirmation
+    labels, lines = [], []
+    for field, label in FIELDS.items():
+        before, after = getattr(problem, field), getattr(manifest.problem, field)
+        if before == after:
+            continue
+        labels.append(label)
+        if field in {"editorial", "editorial_translations"}:
+            lines.append(f"- {label}이 수정되었습니다.")
+        else:
+            lines.append(f"- {label}: {_brief(before)} → {_brief(after)}")
+    labels.append("테스트·채점 파일")
+    lines.append(f"- 테스트·채점 파일: 새 패키지로 교체 · {sum(len(s.testcases) for s in manifest.testcase_sets if s.is_active)}개 테스트")
+    draft = {"title": f"{problem.problem_code}번 문제 {', '.join(labels[:3])}{' 외' if len(labels) > 3 else ''} 수정 안내",
+        "body": "\n".join(lines), "reason": values["reason"],
+        "fingerprint": digest([problem.problem_id, values["target_hash"], values["archive_hash"]])}
+    # Signed Editor transfers already include a reason and explicit live-update
+    # confirmation. The ZOJ operator UI confirms editable notice copy as well.
+    confirmation = values.get("change_notice") if values.get("require_notice") else draft
+    return validate_confirmation(confirmation, draft)
 
 
 def check_update(db, contest, problem, values):

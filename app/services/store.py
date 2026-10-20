@@ -14,7 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, load_only, object_session, selectinload
 
 from app.database import SessionLocal, create_schema
-from app.services.request_sessions import current_session
+from app.services.request_sessions import after_commit, borrowed_session, current_session
 from app.services.contest_visibility import contest_is_public, contest_hidden_by_status, normalize_private_resources
 from app.services.errors import AppError, permission_denied
 from app.settings import settings
@@ -2873,8 +2873,9 @@ class DbStore:
         visibility: str = "public",
         created_by_email: str | None = None,
         notice_id: str | None = None,
+        session: Session | None = None,
     ) -> ContestNotice:
-        with self._session() as db:
+        with (self._session() if session is None else borrowed_session(session)) as db:
             contest = db.get(ContestRow, contest_id)
             if not contest:
                 raise ValueError("contest not found")
@@ -2933,7 +2934,7 @@ class DbStore:
             #             body_html=content.body_html,
             #         )
             #     )
-            db.commit()
+            db.flush() if session is not None else db.commit()
             db.refresh(row)
             return _contest_notice(row)
 
@@ -3631,7 +3632,7 @@ class DbStore:
 
             for key in deleted_storage_keys:
                 try:
-                    object_storage.delete(key)
+                    after_commit(lambda key=key: object_storage.delete(key))
                 except Exception:
                     pass
             return item
@@ -3847,7 +3848,7 @@ class DbStore:
             db.delete(row)
             db.commit()
             try:
-                object_storage.delete(asset.storage_key)
+                after_commit(lambda key=asset.storage_key: object_storage.delete(key))
             except Exception:
                 pass
             return asset
@@ -3952,7 +3953,7 @@ class DbStore:
             for input_key, output_key in old_keys - new_keys:
                 for key in (input_key, output_key):
                     try:
-                        object_storage.delete(key)
+                        after_commit(lambda key=key: object_storage.delete(key))
                     except Exception:
                         pass
             return [_testcase(row) for row in created_rows]
@@ -3969,7 +3970,7 @@ class DbStore:
             db.commit()
             for key in (item.input_storage_key, item.output_storage_key):
                 try:
-                    object_storage.delete(key)
+                    after_commit(lambda key=key: object_storage.delete(key))
                 except Exception:
                     pass
             return item
@@ -3999,7 +4000,7 @@ class DbStore:
             for input_key, output_key in deleted_keys:
                 for key in (input_key, output_key):
                     try:
-                        object_storage.delete(key)
+                        after_commit(lambda key=key: object_storage.delete(key))
                     except Exception:
                         pass
             return item
