@@ -66,6 +66,7 @@ def test_schedule_manager_can_confirm_emergency_without_notice_permission(contex
     result = client.patch(c["settings"], headers=headers, json={**body, "_change_notice": approval})
     assert result.status_code == 200, result.text
     notice = notices(c)[0]
+    assert result.json()["change_notice"] == notice.model_dump(mode="json")
     assert notice.title == approval["title"] and approval["reason"] in notice.body
     assert notice.emergency and notice.pinned and notice.visibility == "participants"
     assert result.json()["data"]["emergency_notice"] == notice.body

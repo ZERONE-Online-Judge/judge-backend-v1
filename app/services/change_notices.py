@@ -197,8 +197,12 @@ class ChangeNoticeRoute(APIRoute):
                     response = await original(request)
                     notice = getattr(request.state, "change_notice", None)
                     if notice and response.status_code < 400:
-                        store.create_contest_notice(*notice, pinned=True, emergency=True,
+                        saved_notice = store.create_contest_notice(*notice, pinned=True, emergency=True,
                             visibility="participants", created_by_email=str(account.email))
+                        payload = json.loads(response.body)
+                        payload["change_notice"] = saved_notice.model_dump(mode="json")
+                        response.body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
+                        response.headers["content-length"] = str(len(response.body))
                     return response
                 finally:
                     _live_problem.reset(token)

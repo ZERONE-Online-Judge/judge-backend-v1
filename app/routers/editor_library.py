@@ -165,5 +165,8 @@ def apply_update(contest_id: str, request: Request, values: Update, problem_id: 
     finally:
         _archive_slots.release()
     request.state.package_update_audited = True
-    return ok(request, {"problem": result, "backup_url": f"/api/operator/contests/{contest_id}/problems/{values.target_problem_id}/package-backups/{operation}",
+    response = ok(request, {"problem": result, "backup_url": f"/api/operator/contests/{contest_id}/problems/{values.target_problem_id}/package-backups/{operation}",
         "revision": package.get("revision"), "official_results_unchanged": True})
+    if context.get("change_notice"):
+        response["change_notice"] = context["change_notice"]
+    return response

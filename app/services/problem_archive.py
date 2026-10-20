@@ -530,8 +530,9 @@ def import_archive(source, contest_id: str, division_id: str, problem_code: str,
                             **({"reason": update_context['reason'], "backup_key": backup_key, "previous_target_hash": update_context['target_hash'], "editor": editor_context.get('source', {})} if update_context else {})}, ensure_ascii=False)))
             if update_context and update_notice:
                 from app.services.store import store
-                store.create_contest_notice(contest_id, *update_notice, pinned=True, emergency=True,
+                saved_notice = store.create_contest_notice(contest_id, *update_notice, pinned=True, emergency=True,
                     visibility="participants", created_by_email=str(account.email), session=db)
+                editor_context["change_notice"] = saved_notice.model_dump(mode="json")
             db.commit()
             committed = True
             return Problem(**{field: getattr(problem, field) for field in Problem.model_fields}).model_dump(mode='json')

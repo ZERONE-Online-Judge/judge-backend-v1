@@ -50,7 +50,7 @@ def test_read_permission_matrix(context, role):
     routes = {
         "/dashboard": None, "/divisions": None,
         "/operators": "contest.staff.manage", "/participants": "contest.participant.view",
-        "/notices": "contest.notice.view", "/boards": "contest.board.question.view",
+        "/notices": None, "/boards": None,
         "/submissions": "contest.submission.view", "/submission-filters": "contest.submission.view",
         "/judge-history": "contest.submission.view", "/scoreboard/internal": "contest.scoreboard.view",
         "/scoreboard/presentation": "contest.scoreboard.view", "/problems": "contest.problem.view",
@@ -392,8 +392,8 @@ def test_notice_management_is_independent_from_board_management(context):
     notice_id = created.json()["data"]["contest_notice_id"]
     assert client.patch(endpoint + "/" + notice_id, headers=headers, json={"title": "Updated"}).status_code == 200
     assert client.patch(c["prefix"] + "/settings", headers=headers, json={"emergency_notice": "Emergency"}).status_code == 200
-    assert client.get(c["prefix"] + "/boards", headers=headers).status_code == 403
-    assert client.get(endpoint, headers=board_headers).status_code == 403
+    assert client.get(c["prefix"] + "/boards", headers=headers).status_code == 200
+    assert client.get(endpoint, headers=board_headers).status_code == 200
     assert client.patch(endpoint + "/" + notice_id, headers=board_headers, json={"title": "Forbidden"}).status_code == 403
     assert client.delete(endpoint + "/" + notice_id, headers=headers).status_code == 200
 
@@ -411,11 +411,11 @@ def test_all_nonmaster_roles_can_be_selected_together(context):
         assert client.get(c["prefix"] + path, headers=headers).status_code == 200
     response = client.patch(c["prefix"] + "/operators/" + email, headers=c["tokens"]["master"], json={"display_name": "All selected", "roles": roles})
     assert response.status_code == 200
-    # Removing the standalone notice role revokes its scope immediately, even
-    # though the account still has board, settings and every other limited role.
+    # Removing the notice role revokes writing immediately; shared reading remains.
     response = client.patch(c["prefix"] + "/operators/" + email, headers=c["tokens"]["master"], json={"display_name": "Without notices", "roles": [role for role in roles if role != "notices_manager"]})
     assert response.status_code == 200
-    assert client.get(c["prefix"] + "/notices", headers=headers).status_code == 403
+    assert client.get(c["prefix"] + "/notices", headers=headers).status_code == 200
+    assert client.post(c["prefix"] + "/notices", headers=headers, json={"title": "No", "body": "No"}).status_code == 403
     assert client.get(c["prefix"] + "/boards", headers=headers).status_code == 200
     assert client.post(c["prefix"] + "/operators", headers=c["tokens"]["master"], json={"email": email, "display_name": "Invalid mix", "roles": ["master", *roles]}).status_code == 422
 
@@ -446,3 +446,49 @@ def test_legacy_combined_notice_grants_migrate_without_new_board_role_escalation
         saved_scopes, saved_roles = connection.execute(text("SELECT contest_scopes, contest_roles FROM staff_accounts")).one()
         assert json.loads(saved_scopes) == scopes
         assert json.loads(saved_roles) == {**roles, "legacy": ["posts_manager", "problem_reviewer", "notices_manager"]}
+
+
+@pytest.mark.parametrize("status", list(ContestStatus))
+def test_operator_default_read_access_preserves_writes_and_private_data(context, status):
+    c = context
+    headers = c["tokens"]["settings_manager"]
+    cid, pid = c["cid"], c["problem"].problem_id
+    prefix = c["prefix"]
+    future = now_utc() + timedelta(days=2)
+    store.update_contest_settings(cid, status=status,
+        start_at=now_utc() - timedelta(hours=1) if status == ContestStatus.RUNNING else future,
+        freeze_at=future + timedelta(hours=1), end_at=future + timedelta(hours=2))
+    try:
+        assert client.get(prefix + "/notices", headers=headers).status_code == 200
+        assert client.get(prefix + "/boards", headers=headers).status_code == 200
+        problems = client.get(prefix + "/problems", headers=headers)
+        assets = client.get(prefix + f"/problems/{pid}/assets", headers=headers)
+        expected = 200 if status == ContestStatus.RUNNING else 403
+        assert problems.status_code == assets.status_code == expected
+        if status == ContestStatus.RUNNING:
+            item = next(p for p in problems.json()["data"] if p["problem_id"] == pid)
+            assert item["editorial"] == "" and item["editorial_translations"] == {}
+            assert all(a["mime_type"].startswith("image/") and "editorial" not in a["storage_key"]
+                and "package-files" not in a["storage_key"] for a in assets.json()["data"])
+        for method, path, body in [
+            ("post", "/notices", {"title": "No", "body": "No"}),
+            ("patch", "/notices/unknown", {"title": "No"}),
+            ("delete", "/notices/unknown", None),
+            ("patch", "/boards/unknown", {"visibility": "public"}),
+            ("delete", "/boards/unknown", None),
+            ("post", "/boards/unknown/answers", {"body": "No"}),
+            ("patch", "/boards/unknown/answers/unknown", {"body": "No"}),
+            ("delete", "/boards/unknown/answers/unknown", None),
+            ("patch", f"/problems/{pid}", {"title": "No"}),
+            ("post", f"/problems/{pid}/test-submissions", {"language": "cpp17", "source_code": "int main(){}"}),
+        ]:
+            result = client.request(method, prefix + path, headers=headers, json=body)
+            assert result.status_code == 403, (status, method, path, result.text)
+        for path in (f"/problems/{pid}/testcase-sets", f"/problems/{pid}/package-status"):
+            assert client.get(prefix + path, headers=headers).status_code == 403
+        for path in ("/notices", "/boards", "/problems"):
+            assert client.get(prefix + path).status_code == 401
+            assert client.get("/api/operator/contests/unassigned-contest" + path, headers=headers).status_code == 403
+    finally:
+        store.update_contest_settings(cid, status=ContestStatus.DRAFT,
+            start_at=future, freeze_at=future + timedelta(hours=1), end_at=future + timedelta(hours=2))

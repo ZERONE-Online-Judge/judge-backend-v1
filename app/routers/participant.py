@@ -673,7 +673,7 @@ def create_question(contest_id: str, payload: QuestionCreateRequest, request: Re
         operator_accounts = [
             account
             for account in store.contest_operator_accounts(contest_id)
-            if not account.is_service_master and has_contest_permission(account, contest_id, "contest.board.question.view")
+            if not account.is_service_master and has_contest_permission(account, contest_id, "contest.board.question.manage")
         ]
         subject = f"[ZOJ] 새 질문 · {contest.title}"
         question_url = absolute_url(f"/operator/contests/{contest_id}/board?questionId={question.contest_question_id}")
