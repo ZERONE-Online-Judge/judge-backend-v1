@@ -156,7 +156,7 @@ def case_detail(cid, pid, sid, index):
         actual = None
         if result["output_available"]:
             actual = preview(output_key(row, index, result["output_sha256"]), result["output_sha256"])
-            actual.update(size=result["output_total_bytes"], truncated=result["output_truncated"])
+            actual.update(size=result["output_total_bytes"], truncated=actual["truncated"] or result["output_truncated"])
         return {**public_case(result), "judge_message": result["judge_message"],
                 "input": preview(case["input_storage_key"], case["input_sha256"]),
                 "expected": preview(case["output_storage_key"], case["output_sha256"]), "actual": actual}

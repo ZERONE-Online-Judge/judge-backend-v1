@@ -79,11 +79,13 @@ class ObjectStorage:
         return path.read_bytes()
 
     @contextmanager
-    def open_reader(self, storage_key: str):
+    def open_reader(self, storage_key: str, *, offset: int = 0, length: int | None = None):
         """Read large archive objects without loading the whole file in memory."""
         self.validate_key(storage_key)
         if self.backend == "minio":
-            response = self._client().get_object(settings.object_storage_bucket, storage_key)
+            response = self._client().get_object(
+                settings.object_storage_bucket, storage_key, offset=offset, length=length or 0,
+            )
             try:
                 yield response
             finally:
@@ -91,6 +93,7 @@ class ObjectStorage:
                 response.release_conn()
         else:
             with (Path(settings.local_object_storage_root) / storage_key).open("rb") as source:
+                source.seek(offset)
                 yield source
 
     def write_stream(self, storage_key: str, source, size: int, content_type: str) -> None:

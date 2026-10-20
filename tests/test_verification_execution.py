@@ -185,3 +185,16 @@ def test_system_error_retry_clears_previous_coverage_and_rejects_previous_lease(
     retried=store.claim_jobs(c['node'].judge_node_id,SECRET,1)[0]
     assert progress(job,[case(2)]).status_code==409
     assert finish(retried,[case(1),case(2)],'accepted',None).status_code==200
+
+
+def test_actual_output_preview_keeps_its_own_truncation_flag(context, monkeypatch):
+    monkeypatch.setattr(execution, "MAX_PREVIEW", 16)
+    c = context
+    sid, job = setup(c, count=1)
+    output = b'x' * (execution.MAX_PREVIEW + 8)
+    response = finish(job, [case(1, output=output)], status='accepted', failed=None)
+    assert response.status_code == 200, response.text
+    detail = client.get(c['base'] + f'/verification-runs/{sid}/testcases/1', headers=c['headers']['owner']).json()['data']
+    assert detail['actual']['truncated'] is True
+    assert len(detail['actual']['text']) == execution.MAX_PREVIEW
+    assert detail['actual']['size'] == len(output)
