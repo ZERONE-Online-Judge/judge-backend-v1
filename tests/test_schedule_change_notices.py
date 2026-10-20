@@ -40,13 +40,29 @@ def create_contest(status):
     return contest
 
 
+def confirm_schedule_change(client, contest, body):
+    endpoint = f"/api/operator/contests/{contest.contest_id}/settings"
+    response = client.patch(endpoint, json=body)
+    assert response.status_code == 409, response.text
+    error = response.json()["error"]
+    assert error["code"] == "change_notice_required"
+    assert store.contests[contest.contest_id].end_at == contest.end_at
+    assert store.contest_notices_for_view(contest.contest_id, operator=True) == []
+    return client.patch(endpoint, json={
+        **body,
+        "_change_notice": {**error["details"], "reason": "운영 일정 재조정"},
+    })
+
+
 @pytest.mark.parametrize("status", list(ContestStatus))
-def test_schedule_change_only_announces_open_or_running_contests(schedule_client, status):
+def test_schedule_change_only_requires_notice_for_open_or_running_contests(schedule_client, status):
     contest = create_contest(status)
     new_end = contest.end_at + timedelta(minutes=10)
-    response = schedule_client.patch(f"/api/operator/contests/{contest.contest_id}/settings", json={
-        "end_at": new_end.isoformat(),
-    })
+    body = {"end_at": new_end.isoformat()}
+    if status in {ContestStatus.OPEN, ContestStatus.RUNNING}:
+        response = confirm_schedule_change(schedule_client, contest, body)
+    else:
+        response = schedule_client.patch(f"/api/operator/contests/{contest.contest_id}/settings", json=body)
     assert response.status_code == 200, response.text
     assert response.json()["data"]["end_at"] == new_end.isoformat().replace("+00:00", "Z")
     saved = store.contests[contest.contest_id]
@@ -54,6 +70,8 @@ def test_schedule_change_only_announces_open_or_running_contests(schedule_client
     if status in {ContestStatus.OPEN, ContestStatus.RUNNING}:
         assert [notice.title for notice in notices] == ["대회 일정 변경"]
         assert "종료 시간이" in saved.emergency_notice
+        assert "운영 일정 재조정" in notices[0].body
+        assert notices[0].emergency and notices[0].pinned
         assert response.json()["data"]["emergency_notice"] == saved.emergency_notice
     else:
         assert notices == []
@@ -62,37 +80,44 @@ def test_schedule_change_only_announces_open_or_running_contests(schedule_client
 
 @pytest.mark.parametrize("next_status", [ContestStatus.DRAFT, ContestStatus.SCHEDULE_TBD,
     ContestStatus.SCHEDULED, ContestStatus.ENDED, ContestStatus.FINALIZED, ContestStatus.ARCHIVED])
-def test_hiding_or_ending_contest_with_schedule_edit_does_not_announce(schedule_client, next_status):
+def test_hiding_or_ending_public_contest_still_requires_notice_for_schedule_edit(schedule_client, next_status):
     contest = create_contest(ContestStatus.OPEN)
-    response = schedule_client.patch(f"/api/operator/contests/{contest.contest_id}/settings", json={
+    response = confirm_schedule_change(schedule_client, contest, {
         "status": next_status.value,
         "end_at": (contest.end_at + timedelta(minutes=10)).isoformat(),
         "emergency_notice": "직접 작성한 안내",
     })
     assert response.status_code == 200, response.text
     assert response.json()["data"]["status"] == next_status.value
-    assert store.contest_notices_for_view(contest.contest_id, operator=True) == []
-    assert store.contests[contest.contest_id].emergency_notice == "직접 작성한 안내"
+    notices = store.contest_notices_for_view(contest.contest_id, operator=True)
+    assert len(notices) == 1
+    assert "종료 시간이" in notices[0].body
+    assert "운영 일정 재조정" in notices[0].body
+    assert store.contests[contest.contest_id].emergency_notice == notices[0].body
 
 
-def test_schedule_edit_that_ends_contest_does_not_announce(schedule_client):
+def test_schedule_edit_that_ends_running_contest_requires_notice(schedule_client):
     contest = create_contest(ContestStatus.RUNNING)
     new_end = datetime.now(timezone.utc) - timedelta(minutes=1)
-    response = schedule_client.patch(f"/api/operator/contests/{contest.contest_id}/settings", json={
+    response = confirm_schedule_change(schedule_client, contest, {
         "end_at": new_end.isoformat(),
     })
     assert response.status_code == 200, response.text
     assert response.json()["data"]["status"] == ContestStatus.ENDED.value
-    assert store.contest_notices_for_view(contest.contest_id, operator=True) == []
-    assert store.contests[contest.contest_id].emergency_notice == "기존 운영 안내"
+    notices = store.contest_notices_for_view(contest.contest_id, operator=True)
+    assert len(notices) == 1
+    assert "종료 시간이" in notices[0].body
+    assert store.contests[contest.contest_id].emergency_notice == notices[0].body
 
 
-def test_disabling_automatic_notices_preserves_manual_banner(schedule_client, monkeypatch):
+def test_legacy_automatic_notice_flag_does_not_bypass_confirmation(schedule_client, monkeypatch):
     contest = create_contest(ContestStatus.OPEN)
     monkeypatch.setattr(settings, "feature_emergency_notice_auto", False)
-    response = schedule_client.patch(f"/api/operator/contests/{contest.contest_id}/settings", json={
+    response = confirm_schedule_change(schedule_client, contest, {
         "end_at": (contest.end_at + timedelta(minutes=10)).isoformat(),
     })
     assert response.status_code == 200, response.text
-    assert store.contest_notices_for_view(contest.contest_id, operator=True) == []
-    assert store.contests[contest.contest_id].emergency_notice == "기존 운영 안내"
+    notices = store.contest_notices_for_view(contest.contest_id, operator=True)
+    assert len(notices) == 1
+    assert "운영 일정 재조정" in notices[0].body
+    assert store.contests[contest.contest_id].emergency_notice == notices[0].body

@@ -68,9 +68,9 @@ def test_preview_is_an_operator_permission_that_combines_with_other_roles(previe
     assert client.get(endpoint, headers=headers(combined)).status_code == 403
     scopes = c["sessions"][0]["operator_session"]["staff"]["contest_scopes"][c["cid"]]
     assert set(scopes) == {"contest.view", "contest.participant.preview"}
-    for path in ["/dashboard", "/divisions"]:
+    for path in ["/dashboard", "/divisions", "/notices", "/boards"]:
         assert client.get(f"/api/operator/contests/{c['cid']}" + path, headers=headers(c["sessions"][0])).status_code == 200
-    for path in ["/problems", "/participants", "/submissions", "/scoreboard/internal", "/notices", "/boards", "/audit-logs"]:
+    for path in ["/problems", "/participants", "/submissions", "/scoreboard/internal", "/audit-logs"]:
         assert client.get(f"/api/operator/contests/{c['cid']}" + path, headers=headers(c["sessions"][0])).status_code == 403
     assert c["cid"] in {item["contest_id"] for item in client.get("/api/operator/contests", headers=headers(c["sessions"][0])).json()["data"]}
     assert client.get(c["auth"] + "/participant-preview", headers=headers(master)).status_code == 200
