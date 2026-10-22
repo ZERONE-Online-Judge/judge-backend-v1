@@ -2,9 +2,10 @@
 from pydantic import BaseModel, Field, field_validator
 from app.services.errors import AppError
 
-LANGUAGES = ("cpp17", "python313", "java8", "c99", "pypy3", "kotlin")
-NEW_LANGUAGES = {"pypy3", "kotlin"}
-ICPC_CAPABILITY = "judge-icpc-languages-v1"
+DEFAULT_LANGUAGES = ("cpp17", "python311", "java8", "c99", "pypy3", "kotlin")
+LANGUAGES = (*DEFAULT_LANGUAGES, "python313")
+NEW_LANGUAGES = {"python311", "pypy3", "kotlin"}
+RUNTIME_CAPABILITY = "judge-zoj-runtime-v1"
 
 
 def validate_languages(value):
@@ -14,7 +15,7 @@ def validate_languages(value):
 
 
 class ProgrammingLanguages(BaseModel):
-    allowed_languages: list[str] = Field(default_factory=lambda: list(LANGUAGES))
+    allowed_languages: list[str] = Field(default_factory=lambda: list(DEFAULT_LANGUAGES))
 
     @field_validator("allowed_languages", mode="before")
     @classmethod

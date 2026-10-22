@@ -46,7 +46,7 @@ def handle(row, context, state, files, name, args):
             suffix = {
                 "cpp17": "cpp",
                 "c99": "c",
-                "python313": "py",
+                "python313": "py", "python311": "py",
                 "java8": "java", "pypy3": "py", "kotlin": "kt",
             }.get(submission.language, "txt")
             extra[prefix + "source"] = {

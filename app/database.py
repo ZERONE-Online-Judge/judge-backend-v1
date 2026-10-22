@@ -349,7 +349,7 @@ def create_schema() -> None:
             columns = {column["name"] for column in inspector.get_columns("problems")}
             if "allowed_languages" not in columns:
                 with engine.begin() as connection:
-                    connection.execute(text("""ALTER TABLE problems ADD COLUMN allowed_languages JSON DEFAULT '["cpp17","python313","java8","c99","pypy3","kotlin"]' NOT NULL"""))
+                    connection.execute(text("""ALTER TABLE problems ADD COLUMN allowed_languages JSON DEFAULT '["cpp17","python311","java8","c99","pypy3","kotlin"]' NOT NULL"""))
             if "language_resource_limits" not in columns:
                 with engine.begin() as connection:
                     connection.execute(text("ALTER TABLE problems ADD COLUMN language_resource_limits JSON DEFAULT '{}' NOT NULL"))

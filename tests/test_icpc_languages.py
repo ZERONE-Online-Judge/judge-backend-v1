@@ -1,6 +1,6 @@
 import pytest
 from pydantic import ValidationError
-from app.judge_languages import LANGUAGES, ProgrammingLanguages, require_allowed
+from app.judge_languages import DEFAULT_LANGUAGES, LANGUAGES, ProgrammingLanguages, require_allowed
 from app.routers.operator import ProblemUpdateRequest
 from app.services.errors import AppError
 from types import SimpleNamespace
@@ -11,7 +11,7 @@ def test_reject_invalid_language_selection(value):
     with pytest.raises(ValidationError): ProblemUpdateRequest(allowed_languages=value)
 
 def test_legacy_default_and_explicit_subset():
-    assert set(ProgrammingLanguages().allowed_languages)==set(LANGUAGES)
+    assert set(ProgrammingLanguages().allowed_languages)==set(DEFAULT_LANGUAGES)
     problem=SimpleNamespace(allowed_languages=['kotlin','pypy3'])
     for language in problem.allowed_languages: require_allowed(problem,language)
     with pytest.raises(AppError) as error:require_allowed(problem,'cpp17')
@@ -64,7 +64,7 @@ def test_language_policy_migration_preserves_existing_rows(tmp_path):
         connection.execute(sa.text("INSERT INTO problems VALUES ('original')"))
         migration.op=Operations(MigrationContext.configure(connection))
         migration.upgrade()
-        assert json.loads(connection.scalar(sa.text('SELECT allowed_languages FROM problems')))==list(LANGUAGES)
+        assert json.loads(connection.scalar(sa.text('SELECT allowed_languages FROM problems')))==["cpp17", "python313", "java8", "c99", "pypy3", "kotlin"]
         # Schema created from current metadata is safe to upgrade as well.
         migration.upgrade()
         migration.downgrade()

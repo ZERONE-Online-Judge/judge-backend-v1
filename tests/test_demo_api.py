@@ -36,6 +36,7 @@ def patch_with_change_notice(path, **kwargs):
 
 
 def register_judge_node(*, json):
+    json = {"execution_capabilities": ["judge-zoj-runtime-v1"], "execution_revision": "runtime-v1", **json}
     # Provision through the administrator path before testing agent reconnect.
     if not any(n.node_name == json["node_name"] for n in store.judge_nodes.values()):
         store.provision_node(json["node_name"], json["node_secret"], json.get("total_slots", 10))
@@ -2875,7 +2876,7 @@ def test_judge_node_secret_is_required_for_claim_and_result():
     client.post(
         f"/api/contests/{contest_id}/problems/{advanced_problem['problem_id']}/submissions",
         headers=auth_headers(login["access_token"]),
-        json={"language": "python313", "source_code": "print(42)"},
+        json={"language": "python311", "source_code": "print(42)"},
     )
 
     node = register_judge_node(
@@ -2958,7 +2959,7 @@ def test_submission_progress_is_updated_during_judging():
     submission = client.post(
         f"/api/contests/{contest_id}/problems/{advanced_problem['problem_id']}/submissions",
         headers=auth_headers(login["access_token"]),
-        json={"language": "python313", "source_code": "print(42)"},
+        json={"language": "python311", "source_code": "print(42)"},
     )
     assert submission.status_code == 200
     submission_id = submission.json()["data"]["submission_id"]
@@ -3046,7 +3047,7 @@ def test_participant_progress_can_be_hidden_by_contest_setting():
     submission = client.post(
         f"/api/contests/{contest_id}/problems/{advanced_problem['problem_id']}/submissions",
         headers=auth_headers(login["access_token"]),
-        json={"language": "python313", "source_code": "print(42)"},
+        json={"language": "python311", "source_code": "print(42)"},
     )
     assert submission.status_code == 200
     submission_id = submission.json()["data"]["submission_id"]
@@ -3105,7 +3106,7 @@ def test_operator_and_admin_submission_detail_include_source_without_list_payloa
     created = client.post(
         f"/api/contests/{contest_id}/problems/{problem['problem_id']}/submissions",
         headers=auth_headers(login["access_token"]),
-        json={"language": "python313", "source_code": source_code},
+        json={"language": "python311", "source_code": source_code},
     )
     assert created.status_code == 200
     submission_id = created.json()["data"]["submission_id"]
@@ -3212,7 +3213,7 @@ def test_submission_source_code_normalizes_line_endings_for_length():
     created = client.post(
         f"/api/contests/{contest_id}/problems/{problem['problem_id']}/submissions",
         headers=auth_headers(login["access_token"]),
-        json={"language": "python313", "source_code": source_code},
+        json={"language": "python311", "source_code": source_code},
     )
     assert created.status_code == 200
     submission_id = created.json()["data"]["submission_id"]
@@ -3279,7 +3280,7 @@ def test_participant_public_submission_list_includes_each_team_name_after_end():
         response = client.post(
             f"/api/contests/{contest_id}/problems/{problem_id}/submissions",
             headers=auth_headers(token),
-            json={"language": "python313", "source_code": source},
+            json={"language": "python311", "source_code": source},
         )
         assert response.status_code == 200
 
@@ -3329,7 +3330,7 @@ def test_problem_solve_status_uses_live_participant_results_during_scoreboard_fr
     wrong_submission = client.post(
         f"/api/contests/{contest_id}/problems/{problem_id}/submissions",
         headers=auth_headers(login["access_token"]),
-        json={"language": "python313", "source_code": "print(0)"},
+        json={"language": "python311", "source_code": "print(0)"},
     )
     assert wrong_submission.status_code == 200
     wrong_submission_data = wrong_submission.json()["data"]
@@ -3359,7 +3360,7 @@ def test_problem_solve_status_uses_live_participant_results_during_scoreboard_fr
     accepted_submission = client.post(
         f"/api/contests/{contest_id}/problems/{problem_id}/submissions",
         headers=auth_headers(login["access_token"]),
-        json={"language": "python313", "source_code": "print(1)"},
+        json={"language": "python311", "source_code": "print(1)"},
     )
     assert accepted_submission.status_code == 200
     accepted_submission_id = accepted_submission.json()["data"]["submission_id"]
@@ -3445,7 +3446,7 @@ def test_scoreboard_uses_icpc_attempt_policy_per_problem():
         response = client.post(
             f"/api/contests/{contest_id}/problems/{problem['problem_id']}/submissions",
             headers=auth_headers(login["access_token"]),
-            json={"language": "python313", "source_code": source_code},
+            json={"language": "python311", "source_code": source_code},
         )
         assert response.status_code == 200
         submissions.append(response.json()["data"])
@@ -3549,7 +3550,7 @@ def test_scoreboard_ties_zero_solve_and_orders_wrong_only_below_no_submit():
     wrong_submission = client.post(
         f"/api/contests/{contest_id}/problems/{problem_id}/submissions",
         headers=auth_headers(wrong_login["access_token"]),
-        json={"language": "python313", "source_code": "print(0)"},
+        json={"language": "python311", "source_code": "print(0)"},
     )
     assert wrong_submission.status_code == 200
     submission_id = wrong_submission.json()["data"]["submission_id"]
@@ -3611,7 +3612,7 @@ def test_manual_rejudge_api_is_not_available_to_service_master_or_operator():
     submission = client.post(
         f"/api/contests/{contest_id}/problems/{problem['problem_id']}/submissions",
         headers=auth_headers(login["access_token"]),
-        json={"language": "python313", "source_code": "print(90)"},
+        json={"language": "python311", "source_code": "print(90)"},
     ).json()["data"]
 
     node_secret = "rejudge-secret"
@@ -3681,12 +3682,12 @@ def test_judge_claim_includes_active_testcases():
             "time_limit_ms": 1000,
             "memory_limit_mb": 512,
             "language_resource_limits": {
-                "python313": {"time_limit_ms": 2500, "memory_limit_mb": 768}
+                "python311": {"time_limit_ms": 2500, "memory_limit_mb": 768}
             },
             "display_order": 99,
         },
     ).json()["data"]
-    assert problem["language_resource_limits"]["python313"]["time_limit_ms"] == 2500
+    assert problem["language_resource_limits"]["python311"]["time_limit_ms"] == 2500
     testcase_set = client.post(
         f"/api/operator/contests/{contest_id}/problems/{problem['problem_id']}/testcase-sets",
         headers=auth_headers(operator["access_token"]),
@@ -3707,7 +3708,7 @@ def test_judge_claim_includes_active_testcases():
     submission = client.post(
         f"/api/contests/{contest_id}/problems/{problem['problem_id']}/submissions",
         headers=auth_headers(login["access_token"]),
-        json={"language": "python313", "source_code": "print(42)"},
+        json={"language": "python311", "source_code": "print(42)"},
     )
     assert submission.status_code == 200
     submission_id = submission.json()["data"]["submission_id"]
@@ -3727,7 +3728,7 @@ def test_judge_claim_includes_active_testcases():
     assert job["testcases"][0]["input_url"].startswith("file://")
     assert job["problem"]["problem_id"] == problem["problem_id"]
     assert job["problem"]["time_limit_ms"] == 1000
-    assert job["problem"]["language_resource_limits"]["python313"] == {
+    assert job["problem"]["language_resource_limits"]["python311"] == {
         "time_limit_ms": 2500,
         "memory_limit_mb": 768,
     }
@@ -3786,7 +3787,7 @@ def test_judge_claim_uses_compact_payload_when_bundle_exists():
     submission = client.post(
         f"/api/contests/{contest_id}/problems/{problem['problem_id']}/submissions",
         headers=auth_headers(login["access_token"]),
-        json={"language": "python313", "source_code": "print(sum(map(int, input().split())))"},
+        json={"language": "python311", "source_code": "print(sum(map(int, input().split())))"},
     )
     assert submission.status_code == 200
 
@@ -3818,7 +3819,7 @@ def test_judge_dispatcher_recovers_expired_leases():
     submission = client.post(
         f"/api/contests/{contest_id}/problems/{advanced_problem['problem_id']}/submissions",
         headers=auth_headers(login["access_token"]),
-        json={"language": "python313", "source_code": "print(42)"},
+        json={"language": "python311", "source_code": "print(42)"},
     ).json()["data"]
     node = register_judge_node(
         json={"node_name": f"expired-node-{uuid4().hex[:6]}", "node_secret": "demo", "total_slots": 1},
@@ -3896,7 +3897,7 @@ def test_submission_status_wait_does_not_auto_accept_without_judge_result():
     submission = client.post(
         f"/api/contests/{contest_id}/problems/{advanced_problem['problem_id']}/submissions",
         headers=auth_headers(login["access_token"]),
-        json={"language": "python313", "source_code": "print(42)"},
+        json={"language": "python311", "source_code": "print(42)"},
     )
     assert submission.status_code == 200
     submission_id = submission.json()["data"]["submission_id"]

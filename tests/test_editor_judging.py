@@ -515,7 +515,7 @@ def test_remaining_tests_reuse_snapshot_and_keep_fallback_data(database):
         assert db.get(Run, parent) is None and db.get(Run, child) is None
 
 
-@pytest.mark.parametrize('language',['pypy3','kotlin'])
+@pytest.mark.parametrize('language',['python311','pypy3','kotlin'])
 def test_new_judge_languages_do_not_run_on_legacy_agents(database,language):
     content=snapshot(change=lambda manifest,files:manifest['source'].update(language=language))
     result=create_direct(content)
@@ -523,7 +523,7 @@ def test_new_judge_languages_do_not_run_on_legacy_agents(database,language):
     assert judging.claim_jobs(n,SECRET,1)==[]
     with database() as db:
         row=db.get(JudgeNodeRow,n)
-        row.execution_capabilities=[judging.FULL_VERIFICATION,'judge-icpc-languages-v1']
+        row.execution_capabilities=[judging.FULL_VERIFICATION,'judge-zoj-runtime-v1']
         db.commit()
     assert judging.claim_jobs(n,SECRET,1)[0]['submission']['language']==language
 

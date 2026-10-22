@@ -41,7 +41,7 @@ def test_workspace_files_are_scoped_and_editable_without_sending_whole_inputs():
     assert invoke(s, "workspace_list")["files"][0]["path"] == "case.in"
     assert "content" not in invoke(s, "workspace_list")["files"][0]
     candidate = invoke(
-        s, "workspace_candidate", path="src/main.py", language="python313"
+        s, "workspace_candidate", path="src/main.py", language="python311"
     )
     assert s["artifacts"][candidate["artifact_id"]]["source"] == "print(5)"
     invoke(s, "workspace_delete", path="case.in")

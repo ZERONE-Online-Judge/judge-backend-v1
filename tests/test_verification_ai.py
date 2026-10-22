@@ -169,7 +169,7 @@ def context(tmp_path, monkeypatch):
     node = store.provision_node("test-agent", SECRET, 2)
     from app.orm_models import JudgeNodeRow
     with sessions() as db:
-        db.get(JudgeNodeRow, node.judge_node_id).execution_capabilities = ["zoj-judge-full-v1"]
+        db.get(JudgeNodeRow, node.judge_node_id).execution_capabilities = ["zoj-judge-full-v1", "judge-zoj-runtime-v1"]
         db.commit()
     yield dict(
         cid=cid,
@@ -195,7 +195,7 @@ def submit(c, *, expected_status=SubmissionStatus.WRONG_ANSWER, claim=True):
         c["base"] + "/test-submissions",
         headers=c["headers"]["owner"],
         json={
-            "language": "python313",
+            "language": "python311",
             "source_code": c["source"],
             "verification_asset_id": c["aid"],
         },
@@ -356,7 +356,7 @@ def test_permission_and_contest_boundaries_do_not_leak_hidden_tests(context):
 def test_linked_submission_rejects_mismatched_source_and_unprivileged_link(context):
     c = context
     payload = {
-        "language": "python313",
+        "language": "python311",
         "source_code": "print(100)",
         "verification_asset_id": c["aid"],
     }

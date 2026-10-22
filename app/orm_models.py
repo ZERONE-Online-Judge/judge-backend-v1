@@ -120,7 +120,7 @@ class ProblemRow(Base):
     editorial_translations: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}")
     time_limit_ms: Mapped[int] = mapped_column(Integer)
     memory_limit_mb: Mapped[int] = mapped_column(Integer)
-    allowed_languages: Mapped[list] = mapped_column(JSON, default=lambda: ["cpp17", "python313", "java8", "c99", "pypy3", "kotlin"])
+    allowed_languages: Mapped[list] = mapped_column(JSON, default=lambda: ["cpp17", "python311", "java8", "c99", "pypy3", "kotlin"])
     language_resource_limits: Mapped[dict] = mapped_column(JSON, default=dict)
     display_order: Mapped[int] = mapped_column(Integer)
 

@@ -75,7 +75,7 @@ def test_candidate_automatically_executes_and_checks_real_fixture_output(
         agent.handle_tool(
             row, ctx, state, call("workspace_write", path="solution.py", content=source)
         )
-        command = call(tool, path="solution.py", language="python313")
+        command = call(tool, path="solution.py", language="python311")
     assert agent.handle_tool(row, ctx, state, command) is None
     for _ in range(3):
         # A persisted/restored pending call must retain its candidate identity.
@@ -234,7 +234,7 @@ def test_code_fragments_and_selected_passes_are_not_full_verification(agent_cont
     _, row, ctx, state = queued(agent_context)
     files = caps.make_manifest(ctx, row.evidence, state["references"])
     caps.edit_code(
-        state, files, "python313", "original", [{"old": "print(4)\n", "new": GOOD}]
+        state, files, "python311", "original", [{"old": "print(4)\n", "new": GOOD}]
     )
     caps.run_code(row, state, files, ctx, "candidate-1", [1])
     judged(agent_context, SubmissionStatus.ACCEPTED)

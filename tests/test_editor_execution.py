@@ -97,9 +97,9 @@ def test_tool_cancellation_during_upload_cannot_be_undone(execution_db, monkeypa
     assert create_direct(value)['status'] == 'cancelled'
 
 
-def ready_node(slots=2):
+def ready_node(slots=2, modern=True):
     row = store.provision_node('tool-node', SECRET, slots)
-    store.register_node(row.node_name, SECRET, slots, '0.2.22', [PROTOCOL], 'runtime-digest')
+    store.register_node(row.node_name, SECRET, slots, '0.3.0', [PROTOCOL, *(['editor-zoj-runtime-v1'] if modern else [])], 'runtime-digest')
     return row.judge_node_id
 
 
@@ -344,7 +344,7 @@ def test_nonascii_forged_tool_lease_is_rejected_without_server_error(execution_d
 def test_unicode_node_secret_uses_an_encoded_header(execution_db):
     secret='비밀'*16
     row=store.provision_node('unicode-node',secret,1)
-    store.register_node(row.node_name,secret,1,'0.2.22',[PROTOCOL],'runtime')
+    store.register_node(row.node_name,secret,1,'0.3.0',[PROTOCOL,'editor-zoj-runtime-v1'],'runtime')
     enqueue()
     jobs=client.post(f'/api/internal/judge/nodes/{row.judge_node_id}/assignments:claim',json={'node_secret':secret,'max_count':1}).json()['data']['jobs']
     result={'status':'ok','exit_code':0,'cpu_ms':1,'wall_ms':1,'memory_kb':1,'stderr':'','output_base64':'','artifacts':{}}
@@ -361,14 +361,14 @@ def test_cancellation_before_a_late_create_prevents_execution(execution_db):
     n=ready_node();assert claim(n)==[]
 
 
-@pytest.mark.parametrize('command', [['pypy3','sum.py'],['kotlinc','Main.kt'],['/usr/local/lib/icpc-jdk/bin/java','-jar','program.jar']])
+@pytest.mark.parametrize('command', [['python3.11','sum.py'],['pypy3','sum.py'],['kotlinc','Main.kt'],['/usr/local/lib/zoj-jdk/bin/java','-jar','program.jar']])
 def test_new_language_tools_wait_for_updated_runtime(execution_db,command):
     value=payload();value['config']['command']=command
     task=enqueue(value).json()['data']
-    n=ready_node()
+    n=ready_node(modern=False)
     assert execution.claim_jobs(n,SECRET,1)==[]
     with execution_db() as db:
         row=db.get(JudgeNodeRow,n)
-        row.execution_capabilities=[PROTOCOL,'editor-icpc-languages-v1']
+        row.execution_capabilities=[PROTOCOL,'editor-zoj-runtime-v1']
         db.commit()
     assert execution.claim_jobs(n,SECRET,1)[0]['judge_job_id']==task['id']

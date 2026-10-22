@@ -7,7 +7,7 @@ from app.services.problem_archive import ResourceLimit
 from app.services.editor_judging import Snapshot
 
 
-@pytest.mark.parametrize("language,time,memory", [("cpp17",1000,256),("c99",1000,256),("python313",5000,544),("pypy3",5000,640),("java8",3000,528),("kotlin",3000,528)])
+@pytest.mark.parametrize("language,time,memory", [("cpp17",1000,256),("c99",1000,256),("python311",5000,544),("pypy3",5000,640),("java8",3000,528),("kotlin",3000,528)])
 def test_effective_default_and_disable(language,time,memory):
     assert effective_limits(1000,256,language)=={"time_limit_ms":time,"memory_limit_mb":memory}
     disabled={"disable_auto_adjustment":True}
@@ -49,7 +49,7 @@ from app.services.store import store
 
 def test_disabled_policy_survives_problem_copy_package_import_and_patch(context):
     c=context
-    limits={"pypy3":{"disable_auto_adjustment":True,"time_limit_ms":700},"python313":{"memory_limit_mb":384}}
+    limits={"pypy3":{"disable_auto_adjustment":True,"time_limit_ms":700},"python311":{"memory_limit_mb":384}}
     result=client.patch(c["prefix"]+"/problems/"+c["pid"],headers=c["owner"],json={"language_resource_limits":limits})
     assert result.status_code==200,result.text
     assert result.json()["data"]["language_resource_limits"]["pypy3"]["disable_auto_adjustment"] is True
@@ -60,10 +60,10 @@ def test_disabled_policy_survives_problem_copy_package_import_and_patch(context)
     assert imported.status_code==200,imported.text
     restored=store.get_problem(imported.json()["data"]["problem_id"])
     assert restored.language_resource_limits["pypy3"].disable_auto_adjustment
-    assert restored.language_resource_limits["python313"].memory_limit_mb==384
+    assert restored.language_resource_limits["python311"].memory_limit_mb==384
 
 from test_editor_judging import database, snapshot, submit, node, claim, SECRET
-from app.judge_languages import ICPC_CAPABILITY
+from app.judge_languages import RUNTIME_CAPABILITY
 from app.orm_models import EditorJudgeRunRow
 import hashlib
 
@@ -78,7 +78,7 @@ def test_editor_http_snapshot_to_agent_assignment_preserves_policy_and_separates
             manifest['source'].update(name='main.py',language='pypy3',sha256=sha)
         return apply
     node_id=node()
-    store.register_node('editor-test-node',SECRET,2,'0.2.27',execution_capabilities=[ICPC_CAPABILITY])
+    store.register_node('editor-test-node',SECRET,2,'0.2.27',execution_capabilities=[RUNTIME_CAPABILITY])
     first=submit(snapshot(change=change(True)))
     second=submit(snapshot(change=change(False)))
     assert first.status_code==202,first.text
