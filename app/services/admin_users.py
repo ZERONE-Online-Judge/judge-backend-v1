@@ -5,13 +5,14 @@ from datetime import datetime, timezone
 from sqlalchemy import func, select, union
 
 from app.database import SessionLocal
+from app.models import now_utc
 from app.orm_models import (
     AccountPasswordRow, ContestDivisionRow, ContestRow, IdentityAccountRow,
     ParticipantTeamRow, StaffAccountRow, SubmissionRow, TeamMemberRow,
 )
 from app.services.contest_roles import title_for_roles, title_for_scopes
 from app.services.errors import not_found
-from app.services.store import OPERATOR_TEST_TEAM_PREFIX
+from app.services.store import OPERATOR_TEST_TEAM_PREFIX, _aware, _schedule_status
 
 
 def _members():
@@ -47,7 +48,7 @@ def _summaries(db, emails):
         return users
     for row in db.scalars(select(IdentityAccountRow).where(func.lower(IdentityAccountRow.email).in_(emails))):
         user = users[row.email.lower()]
-        user.update(display_name=row.display_name, account_created_at=row.created_at)
+        user.update(display_name=row.display_name, account_created_at=_aware(row.created_at))
         user["names"].append(row.display_name)
     for row in db.scalars(select(StaffAccountRow).where(func.lower(StaffAccountRow.email).in_(emails))):
         user = users[row.email.lower()]
@@ -108,12 +109,13 @@ def user_detail(email: str):
                 .group_by(SubmissionRow.team_member_id))}
         user["participations"] = [dict(
             contest_id=contest.contest_id, contest_title=contest.title,
-            organization_name=contest.organization_name, contest_status=contest.status,
-            start_at=contest.start_at, end_at=contest.end_at,
+            organization_name=contest.organization_name,
+            contest_status=_schedule_status(contest.status, _aware(contest.start_at), _aware(contest.end_at), now_utc()),
+            start_at=_aware(contest.start_at), end_at=_aware(contest.end_at),
             division_name=division.name, team_name=team.team_name,
             team_status=team.status, registered_name=member.name,
-            member_role=member.role, registered_at=team.created_at,
-            last_login_at=member.last_login_at,
+            member_role=member.role, registered_at=_aware(team.created_at),
+            last_login_at=_aware(member.last_login_at),
             submission_count=counts.get(member.team_member_id, (0, 0))[0],
             accepted_submission_count=counts.get(member.team_member_id, (0, 0))[1],
         ) for member, team, contest, division in memberships]
