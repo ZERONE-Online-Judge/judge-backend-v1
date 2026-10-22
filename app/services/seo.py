@@ -242,6 +242,8 @@ PRIVATE_PAGES = {
     "/login": "로그인",
     "/admin": "관리자 콘솔",
     "/admin/contests": "대회 관리",
+    "/admin/notices": "서비스 공지",
+    "/admin/notices/new": "새 공지 작성",
     "/admin/judge": "채점 관리",
     "/admin/analytics": "운영 통계",
     "/admin/audit-logs": "운영 로그",
