@@ -68,7 +68,7 @@ class ArchiveProblem(ProblemStatements, ProgrammingLanguages, ArchiveModel):
     editorial: str = Field(default='', max_length=4 * 1024 * 1024)
     time_limit_ms: StrictInt = Field(ge=100, le=10000)
     memory_limit_mb: StrictInt = Field(ge=16, le=1024)
-    language_resource_limits: dict[str, ResourceLimit] = Field(default_factory=dict, max_length=6)
+    language_resource_limits: dict[str, ResourceLimit] = Field(default_factory=dict, max_length=7)
     display_order: StrictInt = Field(ge=1, le=1_000_000)
 
     @field_validator('language_resource_limits')
@@ -76,6 +76,8 @@ class ArchiveProblem(ProblemStatements, ProgrammingLanguages, ArchiveModel):
     def known_languages(cls, value):
         if set(value) - set(LANGUAGES):
             raise ValueError('Unknown language')
+        if 'python313' in value and 'python311' not in value:
+            value = {**value, 'python311': value['python313']}
         return value
 
 
