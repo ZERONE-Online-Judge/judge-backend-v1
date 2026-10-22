@@ -1,7 +1,8 @@
 import asyncio
 from datetime import datetime, timedelta
+from typing import Literal
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, EmailStr, Field, StrictBool, ConfigDict, field_validator, model_validator
 
 from app.models import ContestStatus, ContestVisibility, JudgeNode, now_utc
@@ -123,6 +124,26 @@ class ContactInquiryAnswerRequest(BaseModel):
 class ContestDeleteRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     confirm_title: str = Field(min_length=1, max_length=255)
+
+
+@router.get("/admin/users")
+def admin_users(request: Request, q: str = Query(default="", max_length=200),
+                password: Literal["all", "set", "unset"] = "all",
+                limit: int = Query(default=25, ge=1, le=100),
+                offset: int = Query(default=0, ge=0)):
+    require_service_master(request)
+    from app.services.admin_users import list_users
+    users, total = list_users(q, password, limit, offset)
+    return page(request, users, limit=limit, current_cursor=str(offset),
+                next_cursor=str(offset + limit) if offset + limit < total else None,
+                total_count=total)
+
+
+@router.get("/admin/users/detail")
+def admin_user_detail(request: Request, email: str = Query(min_length=1, max_length=254)):
+    require_service_master(request)
+    from app.services.admin_users import user_detail
+    return ok(request, user_detail(email))
 
 
 @router.get("/admin/dashboard")

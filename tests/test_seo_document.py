@@ -181,7 +181,7 @@ def test_missing_and_nonpublic_contests_have_the_same_generic_404(html_client):
     assert not Document(nonpublic.text).select("script", type="application/ld+json")
 
 
-@pytest.mark.parametrize("path", ["/login", "/admin", "/admin/analytics", "/admin/notices", "/admin/notices/new", "/operator/contests/secret/settings", "/contests/secret/submissions"])
+@pytest.mark.parametrize("path", ["/login", "/admin", "/admin/analytics", "/admin/notices", "/admin/users", "/admin/notices/new", "/operator/contests/secret/settings", "/contests/secret/submissions"])
 def test_access_controlled_app_routes_receive_generic_noindex_documents(html_client, path):
     response = request_page(html_client, path)
     assert response.status_code == 200
