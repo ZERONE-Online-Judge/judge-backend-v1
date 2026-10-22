@@ -158,7 +158,7 @@ def handle(row, context, state, files, name, args, call_id):
                 )
             return put(state, path, text.replace(old, new, 1).encode())
         if (
-            args["language"] not in {"c99", "cpp17", "python313", "java8", "pypy3", "kotlin"}
+            args["language"] not in {"c99", "cpp17", "python311", "python313", "java8", "pypy3", "kotlin"}
             or len(raw) > caps.MAX_SOURCE
             or len(state["artifacts"]) >= 4
         ):

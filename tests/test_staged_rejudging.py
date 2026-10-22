@@ -103,7 +103,7 @@ def test_changed_judging_materials_cannot_be_applied_and_claim_uses_snapshot(dat
     with database() as db:
         if change == 'time': db.get(ProblemRow, 'problem').time_limit_ms = 3000
         elif change == 'memory': db.get(ProblemRow, 'problem').memory_limit_mb = 256
-        elif change == 'language': db.get(ProblemRow, 'problem').language_resource_limits = {'python313': {'time_limit_ms': 9999}}
+        elif change == 'language': db.get(ProblemRow, 'problem').language_resource_limits = {'python311': {'time_limit_ms': 9999}}
         elif change == 'case': db.get(CaseRow, 'case').time_limit_ms_override = 100
         else: db.get(CaseRow, 'case').output_sha256 = 'c'*64
         db.commit()
@@ -152,7 +152,7 @@ def test_bulk_scope_skips_pending_and_excludes_operator_trials_and_other_problem
             ('other', 'participant', 'accepted', 'another'),
         ):
             db.add(SubmissionRow(submission_id=sid, contest_id='contest', division_id='division',
-                problem_id=problem, language='python313', source_code='print(1)', status=status, submission_kind=kind))
+                problem_id=problem, language='python311', source_code='print(1)', status=status, submission_kind=kind))
         db.commit()
     batch = create(problem_id='problem')
     assert batch['total'] == 2 and batch['scope']['skipped_pending'] == 1
@@ -284,11 +284,11 @@ def test_bulk_filters_language_and_team_and_new_submissions_are_not_added(databa
         db.add(SubmissionRow(submission_id='cpp', contest_id='contest', division_id='division',
             problem_id='problem', participant_team_id='team', language='cpp17', source_code='int main(){}', status='accepted'))
         db.commit()
-    batch = create(problem_id='problem', team_id='team', language='python313')
+    batch = create(problem_id='problem', team_id='team', language='python311')
     assert batch['total'] == 1
     with database() as db:
         db.add(SubmissionRow(submission_id='later', contest_id='contest', division_id='division',
-            problem_id='problem', participant_team_id='team', language='python313', source_code='print(0)', status='accepted'))
+            problem_id='problem', participant_team_id='team', language='python311', source_code='print(0)', status='accepted'))
         db.commit()
     assert rejudging.detail(store, 'contest', batch['rejudging_id'])['total'] == 1
     with pytest.raises(AppError):
@@ -313,7 +313,7 @@ def test_normal_submissions_take_priority_over_rejudging(database, finished):
     create()
     with database() as db:
         db.add(SubmissionRow(submission_id='normal', contest_id='contest', division_id='division', problem_id='problem',
-            language='python313', source_code='print(0)', status='waiting'))
+            language='python311', source_code='print(0)', status='waiting'))
         db.add(JudgeJobRow(judge_job_id='normal-job', submission_id='normal', contest_id='contest', division_id='division',
             status='pending', queue_position=999))
         db.commit()

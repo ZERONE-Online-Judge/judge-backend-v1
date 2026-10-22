@@ -232,7 +232,7 @@ def artifact(state, files, artifact_id, language):
                 for suffix, lang in (
                     (".cpp", "cpp17"),
                     (".cc", "cpp17"),
-                    (".py", "python313"),
+                    (".py", "python311"),
                     (".java", "java8"), (".kt", "kotlin"),
                     (".c", "c99"),
                 )

@@ -226,7 +226,7 @@ def test_scoped_file_tools_and_exact_edits(agent_context):
             caps.file_bytes(files, bad)
     with pytest.raises(caps.ToolError):
         caps.edit_code(
-            state, files, "python313", "original", [{"old": "absent", "new": "x"}]
+            state, files, "python311", "original", [{"old": "absent", "new": "x"}]
         )
     assert state["artifacts"] == {}
     read = caps.read_file(files, "original", 0, 4)
@@ -262,7 +262,7 @@ def test_human_submissions_have_priority_and_trial_is_idempotent(agent_context):
     two = caps.run_code(row, state, files, ctx, "original", [])
     assert one["submission_id"] == two["submission_id"]
     human = store.create_operator_test_submission(
-        c["cid"], c["pid"], "python313", "print(42)"
+        c["cid"], c["pid"], "python311", "print(42)"
     )
     jobs = store.claim_jobs(c["node"].judge_node_id, SECRET, 1)
     assert jobs[0]["submission"]["submission_id"] == human.submission_id

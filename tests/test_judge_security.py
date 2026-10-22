@@ -34,11 +34,12 @@ def leased(database):
     node = store.provision_node("approved-node", SECRET, 2)
     with database() as db:
         db.add(SubmissionRow(submission_id="submission", contest_id="contest", division_id="division",
-            problem_id="problem", language="python313", source_code="print(42)", status="judging"))
+            problem_id="problem", language="python311", source_code="print(42)", status="judging"))
         db.add(JudgeJobRow(judge_job_id="job", submission_id="submission", contest_id="contest",
             division_id="division", status="running", queue_position=1,
             assigned_node_id=node.judge_node_id, lease_token="original-lease", leased_at=now_utc()))
         db.commit()
+    store.register_node(node.node_name, SECRET, 2, "0.3.0", ["judge-zoj-runtime-v1"], "runtime-v1")
     return node
 
 

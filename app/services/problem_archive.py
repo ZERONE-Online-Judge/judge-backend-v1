@@ -91,7 +91,7 @@ class ArchiveAsset(ArchiveModel):
     original_filename: str = Field(min_length=1, max_length=255)
     mime_type: str = Field(min_length=1, max_length=120)
     category: str = Field(max_length=80)
-    source_language: Literal['c99', 'cpp17', 'python313', 'java8', 'pypy3', 'kotlin'] | None = None
+    source_language: Literal['c99', 'cpp17', 'python311', 'python313', 'java8', 'pypy3', 'kotlin'] | None = None
     asset_status: str = Field(default='active', min_length=1, max_length=32)
     created_at: str = Field(max_length=40)
 

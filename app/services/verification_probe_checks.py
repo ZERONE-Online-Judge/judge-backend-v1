@@ -79,7 +79,7 @@ def check(row, context, state, files, args, call):
                 ".cpp": "cpp17",
                 ".cc": "cpp17",
                 ".c": "c99",
-                ".py": "python313",
+                ".py": "python311",
             }.get(ext)
             if not language:
                 raise caps.ToolError(

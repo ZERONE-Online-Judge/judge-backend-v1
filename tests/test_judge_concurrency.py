@@ -47,7 +47,7 @@ def pg_database(monkeypatch):
                               title="Test", statement="", time_limit_ms=1000, memory_limit_mb=128, display_order=1))
             db.flush()
             db.add(SubmissionRow(submission_id="submission", contest_id="contest", division_id="division",
-                                 problem_id="problem", language="python313", source_code="print(42)", status="judging"))
+                                 problem_id="problem", language="python311", source_code="print(42)", status="judging"))
             db.flush()
             db.add(JudgeJobRow(judge_job_id="job", submission_id="submission", contest_id="contest", division_id="division",
                                status="running", queue_position=1, assigned_node_id=node.judge_node_id,

@@ -84,7 +84,7 @@ def create(email, content, fingerprint):
         row = previous
         if not row:
             row = Task(task_id=task_id, operation_key=operation, owner_id=account.account_id, fingerprint=fingerprint, status="uploading",
-                   input_key=key, payload={"config": payload["config"], "runtime": payload["runtime"], "job_kind": payload["job_kind"], "input_sha256": fingerprint, "requires_icpc": any(token in json.dumps(payload["config"]) for token in ("pypy", "kotlin", "kotlinc", "icpc-jdk"))})
+                   input_key=key, payload={"config": payload["config"], "runtime": payload["runtime"], "job_kind": payload["job_kind"], "input_sha256": fingerprint, "requires_zoj_runtime": True})
             db.add(row)
         db.commit()
 
@@ -157,6 +157,8 @@ def claim_jobs(node_id, node_secret, max_count, session_factory=None):
             db.commit()
             return []
         query = select(Task).where(Task.status == "waiting")
+        if "editor-zoj-runtime-v1" not in (node.execution_capabilities or []):
+            query = query.where(Task.payload["requires_zoj_runtime"].as_boolean().is_not(True))
         if "editor-icpc-languages-v1" not in (node.execution_capabilities or []):
             # New compiler and interpreter paths require an updated runtime image.
             query = query.where(Task.payload["requires_icpc"].as_boolean().is_not(True))

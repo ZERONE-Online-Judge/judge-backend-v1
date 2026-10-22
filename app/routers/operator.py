@@ -1809,7 +1809,7 @@ class RejudgingCreateRequest(BaseModel):
     submission_id: str | None = Field(default=None, min_length=1, max_length=36)
     problem_id: str | None = Field(default=None, min_length=1, max_length=36)
     team_id: str | None = Field(default=None, min_length=1, max_length=36)
-    language: Literal['c99', 'cpp17', 'python313', 'java8', 'pypy3', 'kotlin'] | None = None
+    language: Literal['c99', 'cpp17', 'python311', 'python313', 'java8', 'pypy3', 'kotlin'] | None = None
     reason: str = Field(min_length=1, max_length=1000)
 
     @field_validator('reason')

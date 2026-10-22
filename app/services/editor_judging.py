@@ -25,7 +25,7 @@ from app.services.errors import AppError
 from app.services.node_credentials import valid_node_credential
 from app.services.storage import object_storage
 from app.settings import settings
-from app.judge_languages import LANGUAGES, NEW_LANGUAGES, ICPC_CAPABILITY
+from app.judge_languages import DEFAULT_LANGUAGES, LANGUAGES, NEW_LANGUAGES, RUNTIME_CAPABILITY
 from app.services.problem_archive import ResourceLimit
 from app.language_limits import agent_problem
 
@@ -47,7 +47,7 @@ class Strict(BaseModel):
 
 class Source(Strict):
     name: str = Field(min_length=1, max_length=150)
-    language: Literal["cpp17", "python313", "c99", "java8", "pypy3", "kotlin"]
+    language: Literal["cpp17", "python311", "python313", "c99", "java8", "pypy3", "kotlin"]
     sha256: str = Field(pattern=HASH)
 
 
@@ -90,7 +90,7 @@ class Snapshot(Strict):
     time_limit_ms: int = Field(ge=100, le=10000)
     memory_limit_mb: int = Field(ge=16, le=1024)
     collect_all_results: bool = False
-    language_resource_limits: dict[str, ResourceLimit] = Field(default_factory=dict, max_length=6)
+    language_resource_limits: dict[str, ResourceLimit] = Field(default_factory=dict, max_length=7)
 
     @field_validator("language_resource_limits")
     @classmethod
@@ -130,11 +130,11 @@ def public_run(row):
 def capabilities():
     with SessionLocal() as db:
         nodes = db.scalars(select(JudgeNodeRow).where(JudgeNodeRow.schedulable.is_(True), JudgeNodeRow.allow_editor.is_(True))).all()
-        versions = sorted({n.agent_version for n in nodes})
+        versions = sorted({(n.agent_version, n.execution_revision or "") for n in nodes})
         revision = hashlib.sha256(json.dumps([FULL_VERIFICATION, settings.release_version, versions], separators=(",", ":")).encode()).hexdigest()[:16]
         return {
             "backend": "zoj", "runtime_revision": "zoj-judge-" + revision,
-            "languages": list(LANGUAGES),
+            "languages": list(DEFAULT_LANGUAGES),
             "full_suite_protocol": FULL_VERIFICATION,
             "full_suite_online_nodes": sum(FULL_VERIFICATION in (n.execution_capabilities or []) and aware(n.last_heartbeat_at) >= now_utc() - timedelta(seconds=settings.judge_node_active_window_seconds) for n in nodes),
             "standard_io_only": True, "contest_submissions_first": True,
@@ -410,7 +410,7 @@ def claim_jobs(node_id, node_secret, max_count, session_factory=None):
             db.commit()
             return []
         query = select(Run).where(Run.status == "waiting")
-        if ICPC_CAPABILITY not in (node.execution_capabilities or []):
+        if RUNTIME_CAPABILITY not in (node.execution_capabilities or []):
             query = query.where(Run.payload["language"].as_string().not_in(NEW_LANGUAGES))
         if FULL_VERIFICATION not in (node.execution_capabilities or []):
             query = query.where(Run.payload["collect_all_results"].as_boolean().is_not(True))

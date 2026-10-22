@@ -19,7 +19,7 @@ from app.services.contest_visibility import contest_is_public, contest_hidden_by
 from app.services.errors import AppError, permission_denied
 from app.settings import settings
 from app.problem_languages import validate_statement_fields
-from app.judge_languages import LANGUAGES, NEW_LANGUAGES, ICPC_CAPABILITY, require_allowed, validate_languages
+from app.judge_languages import DEFAULT_LANGUAGES, LANGUAGES, NEW_LANGUAGES, RUNTIME_CAPABILITY, require_allowed, validate_languages
 from app.services.package_builder import is_editor_source_asset
 from app.models import (
     AccessLog,
@@ -3558,7 +3558,7 @@ class DbStore:
                 time_limit_ms=time_limit_ms,
                 memory_limit_mb=memory_limit_mb,
                 language_resource_limits=language_resource_limits or {},
-                allowed_languages=validate_languages(allowed_languages if allowed_languages is not None else list(LANGUAGES)),
+                allowed_languages=validate_languages(allowed_languages if allowed_languages is not None else list(DEFAULT_LANGUAGES)),
                 display_order=display_order,
             )
             db.add(row)
@@ -5362,7 +5362,7 @@ class DbStore:
                 .join(SubmissionRow, SubmissionRow.submission_id == JudgeJobRow.submission_id)
                 .where(JudgeJobRow.status == JudgeJobStatus.PENDING.value)
                 .where(~full_verification if verification_execution.CAPABILITY not in (node.execution_capabilities or []) else True)
-                .where(SubmissionRow.language.in_(LANGUAGES if ICPC_CAPABILITY in (node.execution_capabilities or []) else [lang for lang in LANGUAGES if lang not in NEW_LANGUAGES]))
+                .where(SubmissionRow.language.in_(LANGUAGES if RUNTIME_CAPABILITY in (node.execution_capabilities or []) else [lang for lang in LANGUAGES if lang not in NEW_LANGUAGES]))
                 .order_by(sql_case((is_ai_trial, 2), (rejudging.is_job(), 1), else_=0), JudgeJobRow.queue_position)
                 .limit(safe_max_count)
                 .with_for_update(skip_locked=True)

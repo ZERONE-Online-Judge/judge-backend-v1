@@ -124,7 +124,7 @@ def create(cid, pid, goal, source_asset_id=None, parent_task_id=None, created_by
             "goal": goal,
             "references": refs,
             "source_code": "",
-            "language": "python313",
+            "language": "python311",
             "actual_status": None,
             "expected_status": None,
             "compile_message": None,
@@ -137,7 +137,7 @@ def create(cid, pid, goal, source_asset_id=None, parent_task_id=None, created_by
                 raise not_found("현재 문제에 등록된 검증 코드를 선택해 주세요.")
             try:
                 source, language = caps.artifact(
-                    {"artifacts": {}}, files, file_id, "python313"
+                    {"artifacts": {}}, files, file_id, "python311"
                 )
             except (caps.ToolError, UnicodeError) as error:
                 raise AppError(
@@ -231,7 +231,7 @@ def inherit(state, parent):
     omitted = []
     for key, item in old.get("artifacts", {}).items():
         extension = {
-            "python313": "py",
+            "python313": "py", "python311": "py",
             "cpp17": "cpp",
             "c99": "c",
             "java8": "java", "pypy3": "py", "kotlin": "kt",

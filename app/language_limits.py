@@ -1,7 +1,7 @@
 """Language limits: explicit value, disabled correction, then automatic policy."""
-TIME = {"java8": (2, 1000), "python313": (3, 2000), "pypy3": (3, 2000), "kotlin": (2, 1000)}
-MEMORY = {"java8": (2, 16), "python313": (2, 32), "pypy3": (2, 128), "kotlin": (2, 16)}
-EDITOR_LANGUAGES = {"python3": "python313"}
+TIME = {"java8": (2, 1000), "python313": (3, 2000), "python311": (3, 2000), "pypy3": (3, 2000), "kotlin": (2, 1000)}
+MEMORY = {"java8": (2, 16), "python313": (2, 32), "python311": (2, 32), "pypy3": (2, 128), "kotlin": (2, 16)}
+EDITOR_LANGUAGES = {"python3": "python311"}
 
 
 def effective_limits(time_ms, memory_mb, language, limits=None):

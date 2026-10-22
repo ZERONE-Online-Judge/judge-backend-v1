@@ -28,11 +28,12 @@ def migrate(c, monkeypatch):
 
 def legacy(c, source=None, **values):
     submission = store.create_operator_test_submission(
-        c["cid"], c["pid"], "python313", source or c["source"],
+        c["cid"], c["pid"], "python311", source or c["source"],
         submitted_by_name="old operator",
     )
     with c["sessions"]() as db:
         row = db.get(SubmissionRow, submission.submission_id)
+        row.language = "python313"  # A stored pre-policy submission.
         row.status = "wrong_answer"
         row.judge_message = "original stored diagnosis"
         for key, value in values.items():
@@ -103,7 +104,7 @@ def test_repair_skips_ambiguous_predating_participant_and_ai_trial_records(conte
 
 def test_repair_streams_multiple_batches_without_losing_or_duplicating_records(context, monkeypatch):
     c = context
-    base = store.create_operator_test_submission(c["cid"], c["pid"], "python313", c["source"])
+    base = store.create_operator_test_submission(c["cid"], c["pid"], "python311", c["source"])
     with c["sessions"]() as db:
         division_id = db.get(SubmissionRow, base.submission_id).division_id
         db.add_all([

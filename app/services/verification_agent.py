@@ -135,7 +135,7 @@ TOOLS = [
     ),
     spec(
         "workspace_candidate",
-        "솔루션 후보 저장 후 전체 등록 테스트와 기존 제안 반례를 자동 실행해 결과 반환. language: c99/cpp17/python313/java8/pypy3/kotlin. 실패하면 수정 후 새 후보 등록.",
+        "솔루션 후보 저장 후 전체 등록 테스트와 기존 제안 반례를 자동 실행해 결과 반환. language: c99/cpp17/python311/java8/pypy3/kotlin. 실패하면 수정 후 새 후보 등록.",
         {"path": S, "language": S, "purpose": PURPOSE},
     ),
     spec(
@@ -169,7 +169,7 @@ TOOLS = [
         {
             "language": {
                 "type": "string",
-                "enum": ["c99", "cpp17", "python313", "java8", "pypy3", "kotlin"],
+                "enum": ["c99", "cpp17", "python311", "java8", "pypy3", "kotlin"],
             },
             "complexity": {
                 "type": "string",
