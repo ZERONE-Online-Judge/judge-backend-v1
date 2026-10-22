@@ -1,6 +1,18 @@
 import importlib.util
 from pathlib import Path
 import sqlalchemy as sa
+from app.judge_languages import ProgrammingLanguages
+from app.services.problem_archive import ArchiveProblem
+
+
+def test_legacy_archive_admission_upgrades_without_losing_allowances():
+    assert ProgrammingLanguages(allowed_languages=["cpp17", "python313"]).allowed_languages == ["cpp17", "python311"]
+    limits = {lang: {"time_limit_ms": 700} for lang in ["cpp17", "python313", "java8", "c99", "pypy3", "kotlin"]}
+    problem = ArchiveProblem(problem_code="A", title="Old archive", statement="sum", time_limit_ms=1000,
+        memory_limit_mb=256, display_order=1, allowed_languages=["python313"], language_resource_limits=limits)
+    assert problem.allowed_languages == ["python311"]
+    assert len(problem.language_resource_limits) == 7
+    assert problem.language_resource_limits["python311"] == problem.language_resource_limits["python313"]
 
 
 def test_runtime_migration_preserves_history_and_manual_limits():

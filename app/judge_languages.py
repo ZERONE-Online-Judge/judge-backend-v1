@@ -11,7 +11,9 @@ RUNTIME_CAPABILITY = "judge-zoj-runtime-v1"
 def validate_languages(value):
     if not isinstance(value, list) or not value or len(value) > len(LANGUAGES) or any(item not in LANGUAGES for item in value) or len(set(value)) != len(value):
         raise ValueError("제출 가능한 언어를 중복 없이 한 개 이상 선택하세요.")
-    return list(value)
+    # Imported archives and older clients may still use the previous default ID.
+    # Admission uses the current runtime; stored submissions retain their own ID.
+    return list(dict.fromkeys("python311" if item == "python313" else item for item in value))
 
 
 class ProgrammingLanguages(BaseModel):
