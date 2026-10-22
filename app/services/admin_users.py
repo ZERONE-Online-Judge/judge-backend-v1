@@ -76,7 +76,65 @@ def _summaries(db, emails):
     return users
 
 
-def list_users(q: str, password: str, limit: int, offset: int):
+def _ordered_users(query, sort: str, order: str):
+    matches = query.distinct().subquery()
+    ordered = select(matches.c.email)
+    value = matches.c.email
+    if sort == "name":
+        identities = select(
+            func.lower(IdentityAccountRow.email).label("email"),
+            func.min(IdentityAccountRow.display_name).label("name"),
+        ).group_by(func.lower(IdentityAccountRow.email)).subquery()
+        staff = select(
+            func.lower(StaffAccountRow.email).label("email"),
+            func.min(StaffAccountRow.display_name).label("name"),
+        ).group_by(func.lower(StaffAccountRow.email)).subquery()
+        members = _members().with_only_columns(
+            func.lower(TeamMemberRow.email).label("email"), TeamMemberRow.name,
+            func.row_number().over(
+                partition_by=func.lower(TeamMemberRow.email),
+                order_by=(ContestRow.start_at.desc(), ContestRow.contest_id),
+            ).label("position"),
+            maintain_column_froms=True,
+        ).where(TeamMemberRow.name != func.lower(TeamMemberRow.email)).subquery()
+        ordered = (
+            ordered.outerjoin(identities, identities.c.email == matches.c.email)
+            .outerjoin(staff, staff.c.email == matches.c.email)
+            .outerjoin(members, (members.c.email == matches.c.email) & (members.c.position == 1))
+        )
+        # Match the display-name precedence used in the returned summaries.
+        value = func.lower(func.coalesce(
+            func.nullif(identities.c.name, matches.c.email),
+            func.nullif(staff.c.name, matches.c.email), members.c.name, matches.c.email,
+        ))
+    elif sort == "contest_count":
+        counts = _members().with_only_columns(
+            func.lower(TeamMemberRow.email).label("email"),
+            func.count(func.distinct(ContestRow.contest_id)).label("count"),
+            maintain_column_froms=True,
+        ).group_by(func.lower(TeamMemberRow.email)).subquery()
+        ordered = ordered.outerjoin(counts, counts.c.email == matches.c.email)
+        value = func.coalesce(counts.c.count, 0)
+    elif sort == "created_at":
+        identities = select(
+            func.lower(IdentityAccountRow.email).label("email"),
+            func.min(IdentityAccountRow.created_at).label("created_at"),
+        ).group_by(func.lower(IdentityAccountRow.email)).subquery()
+        ordered = ordered.outerjoin(identities, identities.c.email == matches.c.email)
+        value = identities.c.created_at
+    elif sort == "password_updated_at":
+        passwords = select(
+            func.lower(AccountPasswordRow.email).label("email"),
+            func.max(AccountPasswordRow.updated_at).label("updated_at"),
+        ).group_by(func.lower(AccountPasswordRow.email)).subquery()
+        ordered = ordered.outerjoin(passwords, passwords.c.email == matches.c.email)
+        value = passwords.c.updated_at
+    # Missing dates stay last in either direction; email breaks every tie.
+    direction = value.desc() if order == "desc" else value.asc()
+    return ordered.order_by(direction.nulls_last(), matches.c.email.asc())
+
+
+def list_users(q: str, password: str, limit: int, offset: int, sort: str = "email", order: str = "asc"):
     with SessionLocal() as db:
         query, sources = _directory()
         if q.strip():
@@ -87,7 +145,7 @@ def list_users(q: str, password: str, limit: int, offset: int):
             query = query.where(password_exists if password == "set" else ~password_exists)
         query = query.distinct()
         total = db.scalar(select(func.count()).select_from(query.subquery()))
-        emails = list(db.scalars(query.order_by(sources.c.email).limit(limit).offset(offset)))
+        emails = list(db.scalars(_ordered_users(query, sort, order).limit(limit).offset(offset)))
         summaries = _summaries(db, emails)
         return [summaries[email] for email in emails], total
 

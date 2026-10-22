@@ -1,6 +1,6 @@
 """The user directory merges identities without exposing authentication data."""
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
@@ -165,6 +165,44 @@ def test_directory_is_service_master_only_and_rejects_invalid_filters(directory)
         assert TestClient(app).get(path).status_code == 401
         assert client.get(path, headers=ordinary).status_code == 401
         assert client.get(path, headers=login(str(operator.email))).status_code == 403
-    for params in [{"limit": 101}, {"offset": -1}, {"password": "invalid"}]:
+    for params in [{"limit": 101}, {"offset": -1}, {"password": "invalid"}, {"sort": "invalid"}, {"order": "invalid"}]:
         assert listing(c, **params).status_code == 422
     assert detail(c, "unknown@example.com").status_code == 404
+
+
+@pytest.mark.parametrize("sort,order,expected", [
+    ("email", "asc", ["a", "self", "z", "same"]),
+    ("email", "desc", ["same", "z", "self", "a"]),
+    ("name", "asc", ["z", "a", "same", "self"]),
+    ("name", "desc", ["self", "a", "same", "z"]),
+    ("contest_count", "asc", ["a", "same", "z", "self"]),
+    ("contest_count", "desc", ["self", "z", "a", "same"]),
+    ("created_at", "asc", ["a", "same", "self", "z"]),
+    ("created_at", "desc", ["self", "a", "same", "z"]),
+    ("password_updated_at", "asc", ["a", "same", "self", "z"]),
+    ("password_updated_at", "desc", ["self", "a", "same", "z"]),
+])
+def test_sorting_precedes_pagination_and_keeps_ties_and_missing_dates_stable(directory, sort, order, expected):
+    c = directory
+    emails = {"self": c["email"], "a": f"aaa-{c['marker']}@example.com",
+              "z": f"zzz-{c['marker']}@example.com", "same": f"zzzz-{c['marker']}@example.com"}
+    with store._session() as db:
+        identity = db.scalar(select(IdentityAccountRow).where(IdentityAccountRow.email == c["email"]))
+        identity.created_at = datetime(2021, 1, 1, tzinfo=timezone.utc)
+        for key in ["a", "same"]:
+            db.add(IdentityAccountRow(email=emails[key], display_name="Zulu", created_at=datetime(2020, 1, 1, tzinfo=timezone.utc)))
+            db.add(AccountPasswordRow(email=emails[key], password_hash="NEVER_EXPOSE_THIS_HASH", updated_at=1700000000))
+        db.commit()
+    contest, division, _ = c["memberships"][0]
+    store.create_participant_team(contest.contest_id, division.division_id, "Name fallback", "Alpha", emails["z"], [])
+    seen = []
+    for offset in range(4):
+        response = listing(c, sort=sort, order=order, offset=offset, limit=1)
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["page"]["total_count"] == 4
+        seen.append(payload["data"][0]["email"])
+    assert seen == [emails[key] for key in expected]
+    # Search/password filtering must keep the chosen global ordering.
+    filtered = listing(c, sort=sort, order=order, password="set").json()["data"]
+    assert [row["email"] for row in filtered] == [email for email in seen if email != emails["z"]]

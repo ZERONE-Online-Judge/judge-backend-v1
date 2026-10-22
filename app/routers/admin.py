@@ -129,11 +129,13 @@ class ContestDeleteRequest(BaseModel):
 @router.get("/admin/users")
 def admin_users(request: Request, q: str = Query(default="", max_length=200),
                 password: Literal["all", "set", "unset"] = "all",
+                sort: Literal["email", "name", "contest_count", "created_at", "password_updated_at"] = "email",
+                order: Literal["asc", "desc"] = "asc",
                 limit: int = Query(default=25, ge=1, le=100),
                 offset: int = Query(default=0, ge=0)):
     require_service_master(request)
     from app.services.admin_users import list_users
-    users, total = list_users(q, password, limit, offset)
+    users, total = list_users(q, password, limit, offset, sort, order)
     return page(request, users, limit=limit, current_cursor=str(offset),
                 next_cursor=str(offset + limit) if offset + limit < total else None,
                 total_count=total)
