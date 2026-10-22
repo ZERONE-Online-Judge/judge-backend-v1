@@ -66,6 +66,7 @@ def test_merges_email_and_preserves_each_contest_name_and_password_status(direct
     assert [item["registered_name"] for item in history] == [f"등록이름2-{c['marker']}", f"등록이름1-{c['marker']}"]
     assert all(item["last_login_at"] is None for item in history)
     assert all(item["division_name"] == "일반부" for item in history)
+    assert all(item["start_at"].endswith("Z") and item["registered_at"].endswith("Z") for item in history)
     for payload in [response.text, found.text]:
         assert "NEVER_EXPOSE_THIS_HASH" not in payload
         assert "password_hash" not in payload and "access_token" not in payload
@@ -120,9 +121,13 @@ def test_normalizes_case_across_sources_and_does_not_treat_master_access_as_part
     member_id = c["memberships"][0][2].members[0].team_member_id
     with store._session() as db:
         db.get(TeamMemberRow, member_id).email = c["email"].upper()
+        contest = db.get(ContestRow, c["memberships"][0][0].contest_id)
+        contest.status = "open"
+        contest.start_at, contest.end_at = now_utc() - timedelta(days=2), now_utc() - timedelta(days=1)
         db.commit()
     assert listing(c).json()["page"]["total_count"] == 1
     assert len(detail(c).json()["data"]["participations"]) == 2
+    assert detail(c).json()["data"]["participations"][-1]["contest_status"] == "ended"
     master = next(account for account in store.staff_accounts.values() if account.is_service_master)
     result = detail(c, str(master.email)).json()["data"]
     assert result["operator_contests"] == []
