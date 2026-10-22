@@ -1,6 +1,6 @@
 """The user directory merges identities without exposing authentication data."""
 import os
-from datetime import timedelta
+from datetime import datetime, timedelta
 from uuid import uuid4
 
 import pytest
@@ -66,7 +66,7 @@ def test_merges_email_and_preserves_each_contest_name_and_password_status(direct
     assert [item["registered_name"] for item in history] == [f"등록이름2-{c['marker']}", f"등록이름1-{c['marker']}"]
     assert all(item["last_login_at"] is None for item in history)
     assert all(item["division_name"] == "일반부" for item in history)
-    assert all(item["start_at"].endswith("Z") and item["registered_at"].endswith("Z") for item in history)
+    assert all(datetime.fromisoformat(item[field]).utcoffset() == timedelta(0) for item in history for field in ["start_at", "registered_at"])
     for payload in [response.text, found.text]:
         assert "NEVER_EXPOSE_THIS_HASH" not in payload
         assert "password_hash" not in payload and "access_token" not in payload
