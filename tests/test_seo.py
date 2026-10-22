@@ -166,6 +166,7 @@ def test_metadata_and_sitemap_follow_publish_unpublish_and_notice_edits(public_c
 @pytest.mark.parametrize("path,expected_title", [
     ("/login", "로그인"), ("/admin", "관리자 콘솔"), ("/admin/contests", "대회 관리"),
     ("/admin/analytics", "운영 통계"), ("/admin/notices", "서비스 공지"),
+    ("/admin/users", "사용자 관리"),
     ("/admin/notices/new", "새 공지 작성"), ("/operator", "대회 운영"),
     ("/operator/contests/any-id/settings", "대회 설정"),
     ("/operator/contests/any-id/guide", "운영 가이드"),
