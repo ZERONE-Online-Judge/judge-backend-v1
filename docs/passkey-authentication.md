@@ -22,6 +22,25 @@ keys and biometric data never enter the application.
   session-bound email code in the management dialog.
 - Email OTP remains the recovery path when a device or passkey is unavailable.
 
+## Password changes
+
+ZOJ password registration, changes and recovery accept either the existing
+email code or a registered passkey. Passkey verification does not log in,
+replace a session, or grant unrelated credential-management access.
+`/auth/general/password/passkey/options`, `/verify` and `/confirm` use an
+explicit `set` or `reset` purpose. `set` requires a bearer session; `reset`
+requires an email with an existing password. Each ceremony is bound to its
+email, purpose, password snapshot and (for `set`) session ID.
+
+Successful UV-required verification issues a five-minute opaque proof stored
+only as a digest. Final confirmation atomically consumes that proof with the
+password update, verifies that the credential still belongs to the account,
+and rejects expired/replayed proofs, another email/session/purpose, deleted
+credentials and password changes since the ceremony began. Login challenges
+cannot authorize password changes or vice versa. Password changes revoke all
+sessions, remembered environments, pending email codes and security challenges.
+The schema is unchanged. Deploy these additive APIs before the frontend.
+
 ## Password login policy
 
 A correct password alone can issue a session only when a previous email or

@@ -238,7 +238,9 @@ def register(token, challenge_id, credential, name):
     return {"registered": True}
 
 
-def authentication_options(client_ip, email=None):
+def authentication_options(
+    client_ip, email=None, *, purpose="authenticate", session_id=None, context=None
+):
     # Contest participants commonly share a campus/NAT IP.
     consume("passkey-login-ip", client_ip, 1200, 300)
     rp, _ = relying_party()
@@ -271,8 +273,11 @@ def authentication_options(client_ip, email=None):
             user_verification=UserVerificationRequirement.REQUIRED,
             allow_credentials=allowed,
         )
+        challenge_value = bytes_to_base64url(options.challenge)
+        if context is not None:
+            challenge_value = json.dumps({**context, "webauthn": challenge_value})
         challenge_id = new_challenge(
-            db, "authenticate", bytes_to_base64url(options.challenge), email=email
+            db, purpose, challenge_value, email=email, session_id=session_id
         )
     return {
         "challenge_id": challenge_id,
@@ -280,62 +285,69 @@ def authentication_options(client_ip, email=None):
     }
 
 
+def verify_assertion(db, challenge, credential, expected_challenge=None):
+    rp, origin = relying_party()
+    candidate = db.get(PasskeyRow, credential.get("id"))
+    if not candidate:
+        raise invalid()
+    account = db.scalar(
+        select(IdentityAccountRow)
+        .where(IdentityAccountRow.account_id == candidate.account_id)
+        .with_for_update()
+    )
+    row = db.scalar(
+        select(PasskeyRow)
+        .where(PasskeyRow.credential_id == candidate.credential_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if not row:
+        raise invalid()
+    account = db.get(IdentityAccountRow, row.account_id)
+    try:
+        if parse_client_data_json(
+            base64url_to_bytes(credential["response"]["clientDataJSON"])
+        ).cross_origin:
+            raise invalid()
+        user_handle = credential.get("response", {}).get("userHandle")
+        if (
+            not account
+            or (challenge.email is not None and account.email != challenge.email)
+            or (challenge.email is None and not user_handle)
+            or (
+                user_handle is not None
+                and base64url_to_bytes(user_handle) != account.account_id.encode()
+            )
+        ):
+            raise invalid()
+        result = verify_authentication_response(
+            credential=credential,
+            expected_challenge=base64url_to_bytes(
+                expected_challenge or challenge.challenge
+            ),
+            expected_rp_id=rp,
+            expected_origin=origin,
+            credential_public_key=base64url_to_bytes(row.public_key),
+            credential_current_sign_count=row.sign_count,
+            require_user_verification=True,
+        )
+    except (WebAuthnException, ValueError, TypeError, KeyError):
+        raise invalid()
+    row.sign_count, row.backed_up, row.last_used_at = (
+        result.new_sign_count,
+        result.credential_backed_up,
+        int(time.time()),
+    )
+    return account, row
+
+
 def authenticate(challenge_id, credential, force_new_session, client_ip):
     from app.services.store import store, SessionConflictError
 
     consume("passkey-verify-ip", client_ip, 1200, 300)
-    rp, origin = relying_party()
     with SessionLocal() as db:
         challenge = take_challenge(db, challenge_id, "authenticate")
-        candidate = db.get(PasskeyRow, credential.get("id"))
-        if not candidate:
-            raise invalid()
-        account = db.scalar(
-            select(IdentityAccountRow)
-            .where(IdentityAccountRow.account_id == candidate.account_id)
-            .with_for_update()
-        )
-        row = db.scalar(
-            select(PasskeyRow)
-            .where(PasskeyRow.credential_id == candidate.credential_id)
-            .with_for_update()
-            .execution_options(populate_existing=True)
-        )
-        if not row:
-            raise invalid()
-        account = db.get(IdentityAccountRow, row.account_id)
-        try:
-            if parse_client_data_json(
-                base64url_to_bytes(credential["response"]["clientDataJSON"])
-            ).cross_origin:
-                raise invalid()
-            user_handle = credential.get("response", {}).get("userHandle")
-            if (
-                not account
-                or (challenge.email is not None and account.email != challenge.email)
-                or (challenge.email is None and not user_handle)
-                or (
-                    user_handle is not None
-                    and base64url_to_bytes(user_handle) != account.account_id.encode()
-                )
-            ):
-                raise invalid()
-            result = verify_authentication_response(
-                credential=credential,
-                expected_challenge=base64url_to_bytes(challenge.challenge),
-                expected_rp_id=rp,
-                expected_origin=origin,
-                credential_public_key=base64url_to_bytes(row.public_key),
-                credential_current_sign_count=row.sign_count,
-                require_user_verification=True,
-            )
-        except (WebAuthnException, ValueError, TypeError, KeyError):
-            raise invalid()
-        row.sign_count, row.backed_up, row.last_used_at = (
-            result.new_sign_count,
-            result.credential_backed_up,
-            int(time.time()),
-        )
+        account, row = verify_assertion(db, challenge, credential)
         email = account.email
         # Persist counters even if the user declines replacing an existing session.
         db.commit()
@@ -379,6 +391,14 @@ def remove(token, credential_id):
         if not row:
             raise AppError(404, "not_found", "패스키를 찾을 수 없습니다.")
         db.delete(row)
+        db.execute(
+            delete(SecurityChallengeRow).where(
+                SecurityChallengeRow.email == account.email,
+                SecurityChallengeRow.purpose.in_(
+                    ["pwd-set", "pwd-reset", "pwd-set-proof", "pwd-reset-proof"]
+                ),
+            )
+        )
         db.execute(
             delete(TrustedEnvironmentRow).where(
                 TrustedEnvironmentRow.email == account.email

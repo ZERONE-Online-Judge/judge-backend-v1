@@ -99,18 +99,18 @@ def request_change(email, purpose, client_ip):
     return {"requested": True, "cooldown_seconds": 30, "valid_seconds": 300}
 
 
-def confirm_change(email, purpose, code, password, client_ip):
+def confirm_change(
+    email, purpose, code, password, client_ip, *, passkey_proof=None, session_id=None
+):
     email = email.lower()
     consume("pwd-confirm-ip", client_ip, 200, 3600)
     encoded = hash_password(password)
     at = int(time.time())
     with store._session() as db:
-        row = db.scalar(
-            select(PasswordChallengeRow)
-            .where(
-                PasswordChallengeRow.email == email,
-                PasswordChallengeRow.purpose == purpose,
-            )
+        # Serialize password changes with passkey management and verification.
+        db.scalar(
+            select(IdentityAccountRow)
+            .where(IdentityAccountRow.email == email)
             .with_for_update()
         )
         credential = db.scalar(
@@ -118,51 +118,63 @@ def confirm_change(email, purpose, code, password, client_ip):
             .where(AccountPasswordRow.email == email)
             .with_for_update()
         )
-        if (
-            not row
-            or row.expires_at <= at
-            or row.attempts >= 5
-            or not store._has_general_login_identity(db, email)
-        ):
-            raise AppError(
-                401,
-                "invalid_password_code",
-                "인증번호가 올바르지 않거나 만료되었습니다.",
-            )
-        if not hmac.compare_digest(row.code_digest, proof(email, purpose, code)):
-            db.execute(
-                update(PasswordChallengeRow)
+        if passkey_proof is not None:
+            from app.services.password_passkeys import consume_proof
+            consume_proof(db, email, purpose, passkey_proof, session_id, credential)
+        else:
+            row = db.scalar(
+                select(PasswordChallengeRow)
                 .where(
                     PasswordChallengeRow.email == email,
                     PasswordChallengeRow.purpose == purpose,
                 )
-                .values(attempts=PasswordChallengeRow.attempts + 1)
+                .with_for_update()
             )
-            db.commit()
-            raise AppError(
-                401,
-                "invalid_password_code",
-                "인증번호가 올바르지 않거나 만료되었습니다.",
+            if (
+                not row
+                or row.expires_at <= at
+                or row.attempts >= 5
+                or not store._has_general_login_identity(db, email)
+            ):
+                raise AppError(
+                    401,
+                    "invalid_password_code",
+                    "인증번호가 올바르지 않거나 만료되었습니다.",
+                )
+            if not hmac.compare_digest(row.code_digest, proof(email, purpose, code)):
+                db.execute(
+                    update(PasswordChallengeRow)
+                    .where(
+                        PasswordChallengeRow.email == email,
+                        PasswordChallengeRow.purpose == purpose,
+                    )
+                    .values(attempts=PasswordChallengeRow.attempts + 1)
+                )
+                db.commit()
+                raise AppError(
+                    401,
+                    "invalid_password_code",
+                    "인증번호가 올바르지 않거나 만료되었습니다.",
+                )
+            if (
+                credential.password_hash if credential else ""
+            ) != row.expected_password_hash:
+                raise AppError(
+                    409,
+                    "password_changed",
+                    "비밀번호가 변경되었습니다. 인증번호를 다시 요청하세요.",
+                )
+            consumed = db.execute(
+                delete(PasswordChallengeRow).where(
+                    PasswordChallengeRow.email == email,
+                    PasswordChallengeRow.purpose == purpose,
+                    PasswordChallengeRow.code_digest == row.code_digest,
+                    PasswordChallengeRow.expires_at > at,
+                    PasswordChallengeRow.attempts < 5,
+                )
             )
-        if (
-            credential.password_hash if credential else ""
-        ) != row.expected_password_hash:
-            raise AppError(
-                409,
-                "password_changed",
-                "비밀번호가 변경되었습니다. 인증번호를 다시 요청하세요.",
-            )
-        consumed = db.execute(
-            delete(PasswordChallengeRow).where(
-                PasswordChallengeRow.email == email,
-                PasswordChallengeRow.purpose == purpose,
-                PasswordChallengeRow.code_digest == row.code_digest,
-                PasswordChallengeRow.expires_at > at,
-                PasswordChallengeRow.attempts < 5,
-            )
-        )
-        if not consumed.rowcount:
-            raise AppError(401, "invalid_password_code", "이미 사용한 인증번호입니다.")
+            if not consumed.rowcount:
+                raise AppError(401, "invalid_password_code", "이미 사용한 인증번호입니다.")
         if credential:
             credential.password_hash, credential.updated_at = encoded, at
         else:
