@@ -276,6 +276,8 @@ CONTEST_PAGES = {
 
 
 def _private_page_title(path: str) -> str | None:
+    if re.fullmatch(r"/share/[A-Za-z0-9_-]{11}", path):
+        return "대회 공유 링크"
     if re.fullmatch(r"/presentation/contests/[^/]+", path):
         return "프레젠테이션 스코어보드"
     if path in PRIVATE_PAGES:

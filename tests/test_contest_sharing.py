@@ -112,3 +112,14 @@ def test_short_link_migration_is_idempotent_and_reversible(tmp_path):
             migration.downgrade()
             assert "contest_share_links" not in inspect(db).get_table_names()
             assert db.scalar(text("SELECT COUNT(*) FROM contests")) == 1
+
+
+def test_share_document_is_a_valid_non_indexed_entry_page(context):
+    from app.services.seo import build_page_metadata
+    code = contest_sharing.get_or_create(context['cid'])
+    metadata = build_page_metadata('/share/' + code)
+    assert metadata['status_code'] == 200
+    assert metadata['title'] == '대회 공유 링크 | ZOJ'
+    assert 'noindex' in metadata['robots']
+    assert metadata['structured_data'] == []
+    assert context['contest'].title not in str(metadata)
