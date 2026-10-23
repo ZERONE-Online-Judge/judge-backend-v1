@@ -8,7 +8,7 @@ from pathlib import Path
 from uuid import uuid4
 from typing import Literal
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Query, Request, UploadFile
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 from app.problem_languages import ProblemStatements, StatementTranslation, validate_statement_fields
 
@@ -1373,7 +1373,7 @@ class ScoreboardReleaseRequest(BaseModel):
 
 
 @router.get("/operator/contests/{contest_id}/divisions/{division_id}/scoreboard/release")
-async def scoreboard_release(contest_id: str, division_id: str, request: Request):
+def scoreboard_release(contest_id: str, division_id: str, request: Request):
     require_contest_staff(request, contest_id, "contest.scoreboard.view")
     result = store.scoreboard_release(contest_id, division_id)
     if result is None:
@@ -1382,7 +1382,7 @@ async def scoreboard_release(contest_id: str, division_id: str, request: Request
 
 
 @router.post("/operator/contests/{contest_id}/divisions/{division_id}/scoreboard/release")
-async def update_scoreboard_release(contest_id: str, division_id: str, payload: ScoreboardReleaseRequest, request: Request):
+def update_scoreboard_release(contest_id: str, division_id: str, payload: ScoreboardReleaseRequest, request: Request):
     require_contest_staff(request, contest_id, "contest.scoreboard.manage")
     try:
         result = store.update_scoreboard_release(contest_id, division_id, payload.action, payload.rank, payload.expected_step, payload.expected_revision)
@@ -1394,10 +1394,10 @@ async def update_scoreboard_release(contest_id: str, division_id: str, payload: 
 
 
 @router.get("/operator/contests/{contest_id}/scoreboard/presentation")
-def presentation_scoreboard(contest_id: str, request: Request):
+def presentation_scoreboard(contest_id: str, request: Request, division_id: list[str] | None = Query(default=None, max_length=100)):
     require_contest_staff(request, contest_id, "contest.scoreboard.view")
     from app.services.presentation_board import presentation_board
-    return ok(request, presentation_board(contest_id))
+    return ok(request, presentation_board(contest_id, division_ids=division_id))
 
 
 @router.get("/operator/contests/{contest_id}/problems")
