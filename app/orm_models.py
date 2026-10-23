@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, text
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -396,6 +396,44 @@ class PasswordChallengeRow(Base):
     requested_at: Mapped[int] = mapped_column(Integer)
     expires_at: Mapped[int] = mapped_column(Integer, index=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class PasskeyRow(Base):
+    __tablename__ = "account_passkeys"
+    credential_id: Mapped[str] = mapped_column(String(1024), primary_key=True)
+    account_id: Mapped[str] = mapped_column(ForeignKey("identity_accounts.account_id", ondelete="CASCADE"), index=True)
+    public_key: Mapped[str] = mapped_column(Text)
+    sign_count: Mapped[int] = mapped_column(BigInteger, default=0)
+    name: Mapped[str] = mapped_column(String(80))
+    transports: Mapped[list] = mapped_column(JSON, default=list)
+    backed_up: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[int] = mapped_column(Integer)
+    last_used_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+class SecurityChallengeRow(Base):
+    __tablename__ = "security_challenges"
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    purpose: Mapped[str] = mapped_column(String(16))
+    email: Mapped[str | None] = mapped_column(String(254), nullable=True)
+    session_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    challenge: Mapped[str] = mapped_column(Text)
+    expires_at: Mapped[int] = mapped_column(Integer, index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class SessionVerificationRow(Base):
+    __tablename__ = "session_verifications"
+    session_id: Mapped[str] = mapped_column(ForeignKey("general_sessions.general_session_id", ondelete="CASCADE"), primary_key=True)
+    verified_at: Mapped[int] = mapped_column(Integer)
+
+
+class TrustedEnvironmentRow(Base):
+    __tablename__ = "trusted_login_environments"
+    email: Mapped[str] = mapped_column(String(254), primary_key=True)
+    device_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    ip_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    expires_at: Mapped[int] = mapped_column(Integer, index=True)
 
 
 class EditorImportRow(Base):
