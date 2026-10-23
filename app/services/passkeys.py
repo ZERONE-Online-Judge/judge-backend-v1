@@ -140,11 +140,12 @@ def list_passkeys(token):
 
 
 def registration_options(token, client_ip):
-    consume("passkey-register-ip", client_ip, 60, 300)
+    consume("passkey-register-ip", client_ip, 600, 300)
     rp, _ = relying_party()
     with SessionLocal() as db:
         session, _ = login_security.session_context(db, token, fresh=True)
         account = account_for(db, session)
+        consume("passkey-register-account", account.account_id, 20, 300)
         rows = db.scalars(
             select(PasskeyRow).where(PasskeyRow.account_id == account.account_id)
         ).all()
@@ -238,7 +239,8 @@ def register(token, challenge_id, credential, name):
 
 
 def authentication_options(client_ip):
-    consume("passkey-login-ip", client_ip, 60, 300)
+    # Contest participants commonly share a campus/NAT IP.
+    consume("passkey-login-ip", client_ip, 1200, 300)
     rp, _ = relying_party()
     options = generate_authentication_options(
         rp_id=rp, timeout=120000, user_verification=UserVerificationRequirement.REQUIRED
@@ -257,7 +259,7 @@ def authentication_options(client_ip):
 def authenticate(challenge_id, credential, force_new_session, client_ip):
     from app.services.store import store, SessionConflictError
 
-    consume("passkey-verify-ip", client_ip, 100, 300)
+    consume("passkey-verify-ip", client_ip, 1200, 300)
     rp, origin = relying_party()
     with SessionLocal() as db:
         challenge = take_challenge(db, challenge_id, "authenticate")
@@ -383,7 +385,7 @@ def request_email_verification(token, client_ip):
     from app.services.mail_templates import render_branded_email
     from app.services.store import store
 
-    consume("security-mail-ip", client_ip, 60, 3600)
+    consume("security-mail-ip", client_ip, 1000, 3600)
     with SessionLocal() as db:
         session, _ = login_security.session_context(db, token)
         consume("security-mail-email", session.email, 10, 3600)
@@ -421,7 +423,7 @@ def request_email_verification(token, client_ip):
 def verify_email(token, challenge_id, code, client_ip):
     from app.services.password_auth import proof
 
-    consume("security-verify-ip", client_ip, 100, 300)
+    consume("security-verify-ip", client_ip, 1200, 300)
     with SessionLocal() as db:
         session, _ = login_security.session_context(db, token)
         row = db.scalar(

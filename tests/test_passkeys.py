@@ -628,3 +628,11 @@ def test_audit_ip_does_not_trust_user_supplied_headers():
         }
     )
     assert client_ip(request) == "203.0.113.8"
+
+
+def test_shared_campus_ip_can_start_more_than_sixty_independent_logins(browser):
+    for _ in range(65):
+        response = browser.post(PREFIX + "/passkeys/login/options")
+        assert response.status_code == 200, response.text
+        data = response.json()["data"]
+        assert data["options"]["allowCredentials"] == []
