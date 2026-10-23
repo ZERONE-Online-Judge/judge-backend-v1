@@ -9,7 +9,7 @@ import secrets
 from zoneinfo import ZoneInfo
 from fastapi.encoders import jsonable_encoder
 
-from sqlalchemy import LargeBinary, cast, case as sql_case, delete, func, inspect, or_, select, update
+from sqlalchemy import LargeBinary, cast, case as sql_case, delete, func, inspect, or_, select, tuple_, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, load_only, object_session, selectinload
 
@@ -191,6 +191,7 @@ def _contest(row: ContestRow, *, release_locked: bool | None = None) -> Contest:
         scoreboard_release_mode=ScoreboardReleaseMode(row.scoreboard_release_mode or "manual"),
         scoreboard_release_locked=release_locked,
         mock_judging_enabled=bool(row.mock_judging_enabled),
+        freeze_submission_count_visible=bool(row.freeze_submission_count_visible),
         participant_progress_visible=bool(row.participant_progress_visible),
         mock_judging_progress_visible=bool(row.mock_judging_progress_visible),
         emergency_notice=render_notice(compact_automatic_notice(row.emergency_notice), row, now_utc()),
@@ -1193,6 +1194,45 @@ class DbStore:
         with self._session() as db:
             return int(db.scalar(stmt) or 0)
 
+    def _public_submission_filter(self, contest_id: str, division_id: str | None):
+        # Apply the same freeze before COUNT, paging and payload construction.
+        # Even when ?n is enabled, unrevealed verdicts never enter this API.
+        with self._session() as db:
+            contest = db.get(ContestRow, contest_id)
+            if not contest:
+                return SubmissionRow.contest_id.is_(None)
+            ended = self._scoreboard_ended(contest)
+            strategy = contest.scoreboard_release_mode or "manual"
+            divisions = db.scalars(select(ContestDivisionRow).where(ContestDivisionRow.contest_id == contest_id)).all()
+            clauses = []
+            for division in divisions:
+                did = division.division_id
+                if division_id and division_id != did:
+                    continue
+                release = db.get(ScoreboardReleaseRow, did) if ended else None
+                active = release and release.mode != "not_started"
+                if (active and release.mode == "all") or (ended and strategy == "immediate" and not active):
+                    clauses.append(SubmissionRow.division_id == did)
+                    continue
+                cutoff = self._scoreboard_cutoff(contest, now_utc(), resolver=ended and (strategy == "resolver" or (strategy == "immediate" and active)))
+                if cutoff is None:
+                    clauses.append(SubmissionRow.division_id == did)
+                    continue
+                visible = [SubmissionRow.submitted_at <= cutoff]
+                if active and release.strategy == "manual":
+                    teams = [row["team_id"] for row in release.snapshot_rows if row["rank"] in release.revealed_ranks]
+                    visible.append(SubmissionRow.participant_team_id.in_(teams))
+                elif active and release.strategy == "resolver":
+                    cells = set()
+                    for entry in release.undo_history or []:
+                        delta = entry.get("resolver_delta", {})
+                        events = [delta["event"]] if "event" in delta else [event for _, event in delta.get("events", [])]
+                        cells.update((event["team_id"], event["problem_id"]) for event in events)
+                    pending = {(e["team_id"], e["problem_id"]) for e in release.resolver_state["pending"]}
+                    visible.append(tuple_(SubmissionRow.participant_team_id, SubmissionRow.problem_id).in_(cells - pending))
+                clauses.append((SubmissionRow.division_id == did) & or_(*visible))
+            return or_(*clauses) if clauses else SubmissionRow.contest_id.is_(None)
+
     def list_submissions(
         self,
         *,
@@ -1201,6 +1241,7 @@ class DbStore:
         problem_id: str | None = None,
         participant_team_id: str | None = None,
         exclude_operator_tests: bool = False,
+        public_results: bool = False,
         include_participant_previews: bool = False,
         include_source: bool = False,
         submission_kind: str | None = None,
@@ -1250,6 +1291,10 @@ class DbStore:
                 operator_team_ids = operator_team_ids.where(ParticipantTeamRow.contest_id == contest_id)
             filters.append(SubmissionRow.participant_team_id.not_in(operator_team_ids))
 
+        if public_results:
+            if not contest_id:
+                raise ValueError("Public submissions require a contest")
+            filters.append(self._public_submission_filter(contest_id, division_id))
         base = select(SubmissionRow)
         count_stmt = select(func.count()).select_from(SubmissionRow)
         if filters:
@@ -3220,6 +3265,7 @@ class DbStore:
             "scoreboard_freeze_mode",
             "scoreboard_release_mode",
             "mock_judging_enabled",
+            "freeze_submission_count_visible",
             "participant_progress_visible",
             "mock_judging_progress_visible",
             "emergency_notice",
@@ -4340,8 +4386,10 @@ class DbStore:
             elif release.undo_history is None:
                 undo = {"action": "legacy"}
             result.update(revision=release.revision or 0, undo=undo)
+        if not include_undo and release.mode != "all":
+            result["ranks"] = []
         if strategy == "resolver":
-            state = release.resolver_state or {}
+            state = DbStore._resolver_state(release)
             pending = state.get("pending", [])
             pending_teams = {event["team_id"] for event in pending}
             result["revealed_count"] = sum(row["team_id"] not in pending_teams for row in release.snapshot_rows)
@@ -4350,12 +4398,12 @@ class DbStore:
                 result["ranks"] = []
             result["resolver"] = {
                 "step": state.get("step", 0), "total_steps": state.get("total_steps", 0),
-                "pending_count": len(pending), "last_event": state.get("last_event"),
+                "pending_count": len({(event["team_id"], event["problem_id"]) for event in pending}), "last_event": state.get("last_event"),
             }
         return result
 
     def _new_resolver_state(self, db: Session, contest: ContestRow, division_id: str) -> dict:
-        cutoff = self._scoreboard_cutoff(contest, now_utc(), resolver=True)
+        cutoff = self._scoreboard_cutoff(contest, now_utc(), resolver=contest.scoreboard_release_mode == "resolver")
         board = self.scoreboard_rows(contest.contest_id, division_id, public_view=False, _cutoff_at=cutoff)
         rows = jsonable_encoder(board["rows"])
         team_ids = {row["team_id"] for row in rows}
@@ -4367,7 +4415,7 @@ class DbStore:
             SubmissionRow.division_id == division_id,
             SubmissionRow.submission_kind == "participant",
             SubmissionRow.submitted_at > cutoff,
-        ).order_by(SubmissionRow.submitted_at, SubmissionRow.submission_id)).all()
+        ).order_by(SubmissionRow.submitted_at, SubmissionRow.submission_id)).all() if cutoff else []
         for submission in submissions:
             key = (submission.participant_team_id, submission.problem_id)
             if submission.participant_team_id not in team_ids or key not in scores or key in solved:
@@ -4379,7 +4427,8 @@ class DbStore:
                 "submitted_at": submitted_at.isoformat(),
                 "elapsed_minutes": max(0, int((submitted_at - _aware(contest.start_at)).total_seconds() // 60)),
             })
-        return {"rows": rows, "pending": pending, "step": 0, "total_steps": len(pending), "last_event": None}
+        return {"version": 2, "rows": rows, "pending": pending, "step": 0,
+                "total_steps": len({(event["team_id"], event["problem_id"]) for event in pending}), "last_event": None}
 
     @staticmethod
     def _rank_resolver_rows(rows: list[dict]) -> None:
@@ -4399,36 +4448,65 @@ class DbStore:
                 previous_key = key
             row["rank"] = rank
 
+    @staticmethod
+    def _resolver_state(release: ScoreboardReleaseRow) -> dict:
+        if release.resolver_state and release.resolver_state.get("version") == 2:
+            return release.resolver_state
+        state = deepcopy(release.resolver_state or {})
+        if state:
+            # Preserve already displayed scores in legacy, partly revealed boards.
+            # Convert their progress to cells without replaying rejudged submissions.
+            pending_keys = {(e["team_id"], e["problem_id"]) for e in state["pending"]}
+            completed = set()
+            for entry in release.undo_history or []:
+                delta = entry.get("resolver_delta", {})
+                events = [delta["event"]] if "event" in delta else [e for _, e in delta.get("events", [])]
+                completed.update((e["team_id"], e["problem_id"]) for e in events)
+            completed -= pending_keys
+            state.update(version=2, step=len(completed), total_steps=len(completed | pending_keys))
+        return state
+
     def _advance_resolver(self, release: ScoreboardReleaseRow) -> dict | None:
-        state = deepcopy(release.resolver_state)
+        state = deepcopy(self._resolver_state(release))
         pending = state["pending"]
         if not pending:
             return
-        pending_teams = {event["team_id"] for event in pending}
+        pending_keys = {(event["team_id"], event["problem_id"]) for event in pending}
+        pending_teams = {team for team, _ in pending_keys}
         row = next(row for row in reversed(state["rows"]) if row["team_id"] in pending_teams)
-        event_index = next(index for index, event in enumerate(pending) if event["team_id"] == row["team_id"])
-        event = pending.pop(event_index)
-        inverse = {"row": deepcopy(row), "event": event, "event_index": event_index,
-                   "step": state["step"], "last_event": state.get("last_event")}
+        # problem_scores is in the contest's problem display order, independent
+        # of submission chronology. Only the selected cell is chronological.
+        score = next(score for score in row["problem_scores"] if (row["team_id"], score["problem_id"]) in pending_keys)
+        events = [(index, event) for index, event in enumerate(pending)
+                  if (event["team_id"], event["problem_id"]) == (row["team_id"], score["problem_id"])]
+        inverse = {"row": deepcopy(row), "events": deepcopy(events),
+                   "step": state["step"], "total_steps": state["total_steps"], "last_event": state.get("last_event")}
         old_rank = row["rank"]
-        score = next(score for score in row["problem_scores"] if score["problem_id"] == event["problem_id"])
-        if not score["solved"] and event["status"] == "accepted":
-            score.update(solved=True, wrong_attempts=score["attempts"],
-                         penalty=event["elapsed_minutes"] + score["attempts"] * 20,
-                         solved_at=event["submitted_at"], best_status="accepted")
-            row["solved"] += 1
-            row["penalty"] += score["penalty"]
-            if not row.get("last_solved_at") or datetime.fromisoformat(event["submitted_at"]) > datetime.fromisoformat(row["last_solved_at"]):
-                row["last_solved_at"] = event["submitted_at"]
-        elif not score["solved"] and event["status"] != "compile_error":
-            score["attempts"] += 1
-            score["wrong_attempts"] += 1
-        row["submission_count"] += 1
+        penalty_statuses = {"wrong_answer", "runtime_error", "time_limit_exceeded", "memory_limit_exceeded", "output_limit_exceeded"}
+        last_status = events[-1][1]["status"]
+        for _, event in sorted(events, key=lambda item: item[1]["submitted_at"]):
+            if score["solved"]:
+                break
+            last_status = event["status"]
+            if event["status"] == "accepted":
+                score.update(solved=True, wrong_attempts=score["attempts"],
+                             penalty=event["elapsed_minutes"] + score["attempts"] * 20,
+                             solved_at=event["submitted_at"], best_status="accepted")
+                row["solved"] += 1
+                row["penalty"] += score["penalty"]
+                if not row.get("last_solved_at") or datetime.fromisoformat(event["submitted_at"]) > datetime.fromisoformat(row["last_solved_at"]):
+                    row["last_solved_at"] = event["submitted_at"]
+            elif event["status"] in penalty_statuses:
+                score["attempts"] += 1
+                score["wrong_attempts"] += 1
+        # Post-AC attempts are consumed with their cell, never another step.
+        row["submission_count"] += len(events)
+        state["pending"] = [event for event in pending if (event["team_id"], event["problem_id"]) != (row["team_id"], score["problem_id"])]
         state["step"] += 1
         self._rank_resolver_rows(state["rows"])
         state["last_event"] = {
             "team_id": row["team_id"], "team_name": row["team_name"],
-            "problem_code": event["problem_code"], "status": event["status"],
+            "problem_code": score["problem_code"], "status": last_status,
             "from_rank": old_rank, "to_rank": row["rank"],
         }
         release.resolver_state = state
@@ -4462,7 +4540,13 @@ class DbStore:
             elif "resolver_delta" in entry:
                 inverse = entry["resolver_delta"]
                 state = deepcopy(release.resolver_state)
-                state["pending"].insert(inverse["event_index"], inverse["event"])
+                if "events" in inverse:
+                    for index, event in inverse["events"]:
+                        state["pending"].insert(index, event)
+                    state.update(version=2, total_steps=inverse["total_steps"])
+                else:
+                    state["pending"].insert(inverse["event_index"], inverse["event"])
+                    state.pop("version", None)
                 state["rows"] = [inverse["row"] if row["team_id"] == inverse["row"]["team_id"] else row for row in state["rows"]]
                 state.update(step=inverse["step"], last_event=inverse["last_event"])
                 self._rank_resolver_rows(state["rows"])
@@ -4545,13 +4629,13 @@ class DbStore:
                 release.strategy = strategy
                 release.snapshot_rows = jsonable_encoder(board["rows"])
                 release.revealed_ranks = []
-                release.resolver_state = self._new_resolver_state(db, contest, division_id) if strategy == "resolver" else None
+                release.resolver_state = self._new_resolver_state(db, contest, division_id)
                 release.undo_history = []
                 entry = {"action": action, "mode": "not_started"}
             else:
                 if action == "start":
                     return self._release_summary(release, include_undo=True)
-                if action == "next" and expected_step is not None and expected_step != release.resolver_state["step"]:
+                if action == "next" and expected_step is not None and expected_step != self._resolver_state(release)["step"]:
                     raise ValueError("다른 화면에서 공개가 진행되었습니다. 새로고침 후 다시 시도하세요.")
                 if (action == "all" and release.mode == "all") or (action == "rank" and rank in release.revealed_ranks) or (action == "next" and not release.resolver_state["pending"]):
                     return self._release_summary(release, include_undo=True)
@@ -4567,7 +4651,7 @@ class DbStore:
                 if action == "next":
                     entry["resolver_delta"] = self._advance_resolver(release)
                 if action == "all":
-                    state = deepcopy(release.resolver_state)
+                    state = deepcopy(self._resolver_state(release))
                     state.update(pending=[], step=state["total_steps"], last_event=None)
                     release.resolver_state = state
                 if not release.resolver_state["pending"]:
@@ -4601,36 +4685,37 @@ class DbStore:
         } for score in original["problem_scores"]]
         return row
 
-    def _released_scoreboard(self, release: ScoreboardReleaseRow) -> dict:
-        if release.strategy == "resolver":
-            state = release.resolver_state
-            originals = release.snapshot_rows if release.mode == "all" else state["rows"]
-            pending = state["pending"]
-            pending_teams = {event["team_id"] for event in pending}
+    def _released_scoreboard(self, db: Session, release: ScoreboardReleaseRow, contest: ContestRow) -> dict:
+        if release.mode == "all":
+            rows = [self._public_scoreboard_row(original) for original in release.snapshot_rows]
+        else:
+            # Old manual releases had no frozen base. Reconstruct only their
+            # pre-freeze public records; never use final scores for hidden teams.
+            state = self._resolver_state(release) if release.resolver_state else self._new_resolver_state(db, contest, release.division_id)
+            revealed = set(release.revealed_ranks) if release.strategy != "resolver" else set()
+            published = {row["team_id"]: row for row in release.snapshot_rows if row["rank"] in revealed}
             pending_counts: dict[tuple[str, str], int] = {}
-            for event in pending:
+            for event in state["pending"]:
                 key = (event["team_id"], event["problem_id"])
                 pending_counts[key] = pending_counts.get(key, 0) + 1
+            pending_teams = {team for team, _ in pending_counts}
             rows = []
-            for original in originals:
-                row = self._public_scoreboard_row(original)
-                row["is_finalized"] = row["team_id"] not in pending_teams
+            for original in state["rows"]:
+                complete = original["team_id"] in published
+                row = self._public_scoreboard_row(published.get(original["team_id"], original))
+                row["is_finalized"] = complete or row["team_id"] not in pending_teams
                 for score in row["problem_scores"]:
-                    score["pending_attempts"] = pending_counts.get((row["team_id"], score["problem_id"]), 0)
+                    if contest.freeze_submission_count_visible and not complete and not score["solved"]:
+                        score["pending_attempts"] = pending_counts.get((row["team_id"], score["problem_id"]), 0)
+                    else:
+                        score.pop("pending_attempts", None)
                 rows.append(row)
-        else:
-            revealed = set(release.revealed_ranks)
-            rows = []
-            for index, original in enumerate(release.snapshot_rows):
-                if original["rank"] not in revealed:
-                    rows.append({
-                        "rank": original["rank"], "team_id": f"unrevealed-{index}",
-                        "team_name": "아직 공개되지 않은 순위", "division_id": release.division_id,
-                        "division": None, "solved": 0, "penalty": None,
-                        "submission_count": 0, "problem_scores": [], "is_revealed": False,
-                    })
-                    continue
-                rows.append(self._public_scoreboard_row(original))
+            # Rank from public scores only, not the hidden final standings.
+            if release.strategy != "resolver":
+                ranking = deepcopy([published.get(row["team_id"], row) for row in state["rows"]])
+                self._rank_resolver_rows(ranking)
+                by_id = {row["team_id"]: row for row in rows}
+                rows = [{**by_id[row["team_id"]], "rank": row["rank"]} for row in ranking]
         return {"frozen": release.mode != "all", "rows": rows, "release": self._release_summary(release)}
 
     def scoreboard_rows(self, contest_id: str, division_id: str | None = None, public_view: bool = False, *, _cutoff_at: datetime | None = None, serialized: bool = False, response_division=None) -> dict | str | None:
@@ -4659,7 +4744,7 @@ class DbStore:
             identity = [contest_id, division_id, public_view, ended, cutoff, settings.feature_public_scoreboard_penalty,
                         [contest.status, contest.start_at, contest.end_at, contest.freeze_at,
                          contest.scoreboard_freeze_mode, contest.scoreboard_frozen_at,
-                         contest.scoreboard_release_mode],
+                         contest.scoreboard_release_mode, contest.freeze_submission_count_visible],
                         [release.mode, release.strategy, release.revision] if release else None]
         return cached_result(f"scoreboard:{contest_id}", identity, settings.scoreboard_cache_ttl_seconds,
             compute, serialized=serialized, snapshot=serialized and not ended, compressed=response_division is not None)
@@ -4676,7 +4761,7 @@ class DbStore:
             if public_view and division_id:
                 release = db.get(ScoreboardReleaseRow, division_id) if ended else None
                 if release and release.mode != "not_started" and strategy != "immediate":
-                    return self._released_scoreboard(release)
+                    return self._released_scoreboard(db, release, contest)
 
             cutoff_at = _cutoff_at
             frozen = False
@@ -4704,7 +4789,7 @@ class DbStore:
             excluded_team_ids = {team.participant_team_id for team in teams if team.team_name.startswith(OPERATOR_TEST_TEAM_PREFIX)}
             teams = [team for team in teams if team.participant_team_id not in excluded_team_ids]
             problems = db.execute(select(ProblemRow.problem_id, ProblemRow.problem_code)
-                .where(*problem_filters).order_by(ProblemRow.display_order)).all()
+                .where(*problem_filters).order_by(ProblemRow.display_order, ProblemRow.problem_code, ProblemRow.title, ProblemRow.problem_id)).all()
             divisions = {
                 row.division_id: _division(row)
                 for row in db.scalars(select(ContestDivisionRow).where(ContestDivisionRow.contest_id == contest_id)).all()
@@ -4874,7 +4959,7 @@ class DbStore:
                         problem_score["best_submission_id"] = None
                         problem_score["best_submitted_at"] = None
 
-            if public_view and frozen and strategy == "resolver":
+            if public_view and frozen and contest.freeze_submission_count_visible:
                 # Counts must depend only on received submissions, never on
                 # their unrevealed verdicts (including submissions after an AC).
                 hidden_filters = [

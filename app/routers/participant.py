@@ -790,6 +790,7 @@ def submissions(
             division_id=division_id,
             problem_id=problem_id,
             exclude_operator_tests=True,
+            public_results=True,
             include_source=False,
             limit=limit,
             cursor=cursor,

@@ -32,7 +32,7 @@ def race():
     start = now - timedelta(hours=3)
     contest = store.create_contest("Scoreboard release modes", "Test", "", start_at=start,
         freeze_at=start + timedelta(hours=1), end_at=start + timedelta(hours=2), status=ContestStatus.ENDED)
-    store.update_contest_settings(contest.contest_id, scoreboard_access_after_end="public")
+    store.update_contest_settings(contest.contest_id, scoreboard_access_after_end="public", freeze_submission_count_visible=True)
     divisions = [store.create_contest_division(contest.contest_id, code, code) for code in ("A", "B")]
     teams, submissions = {}, {}
     for division in divisions:
@@ -329,13 +329,10 @@ def test_resolver_compile_errors_are_revealed_without_penalty(race):
     green_before = next(row for row in public(race)["rows"] if row["team_name"] == "Green")
     assert next(score for score in green_before["problem_scores"] if score["problem_code"] == "B")["pending_attempts"] == 2
     started = release(race, "start")
-    assert started["resolver"]["total_steps"] == 3
+    assert started["resolver"]["total_steps"] == 2
     first = release(race, "next")
-    assert first["resolver"]["last_event"]["status"] == "compile_error"
-    assert visible_scores(public(race)) == [("Red", 1, 1, 15), ("Blue", 2, 1, 20), ("Green", 3, 1, 40)]
-    second = release(race, "next")
-    assert second["resolver"]["last_event"]["team_name"] == "Green"
-    assert second["resolver"]["last_event"]["status"] == "accepted"
+    assert first["resolver"]["last_event"]["status"] == "accepted"
+    assert first["resolver"]["step"] == 1
     assert visible_scores(public(race))[0] == ("Green", 1, 2, 110)
 
 
@@ -351,12 +348,11 @@ def test_resolver_accumulates_failures_before_and_after_freeze(race):
         db.commit()
     release(race, "start")
     failed = release(race, "next")
-    assert failed["resolver"]["last_event"]["status"] == "wrong_answer"
+    assert failed["resolver"]["last_event"]["status"] == "accepted"
     green = next(row for row in public(race)["rows"] if row["team_name"] == "Green")
     score = next(score for score in green["problem_scores"] if score["problem_code"] == "B")
     assert score["attempts"] == 2
-    assert not score["solved"]
-    release(race, "next")
+    assert score["solved"]
     green = next(row for row in public(race)["rows"] if row["team_name"] == "Green")
     assert (green["solved"], green["penalty"]) == (2, 150)
     release(race, "next")
@@ -374,13 +370,13 @@ def test_resolver_later_submissions_after_an_ac_never_change_score(race):
         db.commit()
     started = release(race, "start")
     # Pending counts include every hidden attempt, so they do not expose where the AC occurs.
-    assert started["resolver"]["total_steps"] == 3
+    assert started["resolver"]["total_steps"] == 2
     release(race, "next")
     release(race, "next")
     before = visible_scores(public(race))
     assert before == [("Blue", 1, 2, 100), ("Green", 2, 2, 110), ("Red", 3, 1, 15)]
     last = release(race, "next")
-    assert last["resolver"]["last_event"]["status"] == "wrong_answer"
+    assert last["resolver"]["last_event"]["status"] == "accepted"
     assert last["mode"] == "all"
     assert visible_scores(public(race)) == before
 

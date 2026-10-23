@@ -159,8 +159,9 @@ def test_display_obeys_rank_release_and_does_not_leak_hidden_team(setup):
     store.update_scoreboard_release(cid, did, 'start')
     response = display(cid, session)
     assert response.status_code == 200
-    assert 'Hidden result team' not in response.text
-    assert response.json()['data']['sections'][0]['rows'][0]['is_revealed'] is False
+    row = response.json()['data']['sections'][0]['rows'][0]
+    assert row['solved'] == 0 and row['submission_count'] == 0
+    assert response.json()['data']['sections'][0]['release']['ranks'] == []
     store.update_scoreboard_release(cid, did, 'rank', 1)
     assert 'Hidden result team' in display(cid, session).text
 

@@ -80,7 +80,10 @@ def test_versions_load_only_small_columns_and_follow_release_undo_and_policy(set
     assert after_start != after_undo
     with SessionLocal.begin() as db:
         db.get(ContestRow, cid).scoreboard_freeze_mode = "live"
-    assert events.reveal_versions({cid}) != after_undo
+    after_freeze = events.reveal_versions({cid})
+    assert after_freeze != after_undo
+    store.update_contest_settings(cid, freeze_submission_count_visible=True)
+    assert events.reveal_versions({cid}) != after_freeze
     assert events.reveal_versions({"missing"}) == {}
 
 

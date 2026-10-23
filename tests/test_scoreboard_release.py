@@ -59,7 +59,7 @@ def public(contest, division):
     return response.json()['data']
 
 
-def test_partial_release_masks_unrevealed_teams_and_matches_presentation(ranking):
+def test_partial_release_preserves_freeze_and_matches_presentation(ranking):
     contest, (division, other), _, headers = ranking
     before_other = public(contest, other)
     endpoint = url(contest, division)
@@ -67,18 +67,18 @@ def test_partial_release_masks_unrevealed_teams_and_matches_presentation(ranking
     assert started.status_code == 200, started.text
     assert [item['rank'] for item in started.json()['data']['ranks']] == [1, 2]
     hidden = public(contest, division)
-    assert all(row['is_revealed'] is False for row in hidden['rows'])
-    assert 'secret-team' not in str(hidden)
-    assert 'best_submission_id' not in str(hidden)
+    assert all(row['solved'] == 0 and row['submission_count'] == 0 for row in hidden['rows'])
+    assert hidden['release']['ranks'] == []
     assert public(contest, other) == before_other
     # Rank 2 is shared by two teams; reveal them together and retain hidden rank 1.
     revealed = client.post(endpoint, headers=headers, json={'action':'rank','rank':2})
     assert revealed.status_code == 200
     assert revealed.json()['data']['revealed_count'] == 2
     board = public(contest, division)
-    assert board['rows'][0]['is_revealed'] is False
-    assert all(row['is_revealed'] for row in board['rows'][1:])
-    assert 'A-secret-team-0' not in str(board)
+    assert [row['solved'] for row in board['rows']] == [1, 1, 0]
+    assert board['rows'][-1]['team_name'] == 'A-secret-team-0'
+    assert board['rows'][-1]['submission_count'] == 0
+    assert board['release']['ranks'] == []
     assert all(score['best_submission_id'] is None for row in board['rows'][1:] for score in row['problem_scores'])
     presentation = client.get(f'/api/operator/contests/{contest}/scoreboard/presentation', headers=headers).json()['data']
     section = next(s for s in presentation['sections'] if s['division']['division_id'] == division)
