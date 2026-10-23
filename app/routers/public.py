@@ -49,6 +49,13 @@ def _service_master_emails() -> list[str]:
     return emails
 
 
+@router.get("/public/share/{code}")
+def resolve_contest_share(code: str, request: Request, response: Response):
+    from app.services.contest_sharing import resolve
+    response.headers["Cache-Control"] = "no-store"
+    return ok(request, {"contest_id": resolve(code)})
+
+
 @router.get("/public/home")
 @request_database
 def home(request: Request):

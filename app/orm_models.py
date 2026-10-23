@@ -46,6 +46,16 @@ class ContestRow(Base):
     divisions: Mapped[list["ContestDivisionRow"]] = relationship(back_populates="contest")
 
 
+
+class ContestShareLinkRow(Base):
+    __tablename__ = "contest_share_links"
+
+    code: Mapped[str] = mapped_column(String(11), primary_key=True)
+    contest_id: Mapped[str] = mapped_column(
+        ForeignKey("contests.contest_id", ondelete="CASCADE"), unique=True
+    )
+
+
 class ContestDivisionRow(Base):
     __tablename__ = "contest_divisions"
     __table_args__ = (UniqueConstraint("contest_id", "code", name="uq_contest_division_code"),)

@@ -45,6 +45,13 @@ async def operator_mail_logs(contest_id: str, request: Request, filters: dict = 
     logs, next_cursor, total = list_mail_logs(contest_id=contest_id, **filters)
     return page(request, logs, next_cursor=next_cursor, limit=filters["limit"], total_count=total, current_cursor=filters["cursor"])
 
+@router.post("/operator/contests/{contest_id}/share-link")
+def contest_share_link(contest_id: str, request: Request):
+    require_contest_staff(request, contest_id, "contest.notice.view")
+    from app.services.contest_sharing import get_or_create
+    return ok(request, {"code": get_or_create(contest_id)})
+
+
 OPERATOR_TEST_TEAM_PREFIX = "__operator_test__"
 from app.judge_languages import LANGUAGES, ProgrammingLanguages, validate_languages
 SUPPORTED_JUDGE_LANGUAGES = set(LANGUAGES)
