@@ -3285,6 +3285,12 @@ def test_participant_public_submission_list_includes_each_team_name_after_end():
         assert response.status_code == 200
 
     now = datetime.now(timezone.utc)
+    # This ownership-list scenario uses already public, pre-freeze submissions.
+    # Hidden post-freeze rows are covered by the freeze privacy regressions.
+    with store._session() as db:
+        for submission in db.query(SubmissionRow).filter_by(problem_id=problem_id).all():
+            submission.submitted_at = now - timedelta(minutes=90)
+        db.commit()
     store.update_contest_settings(
         contest_id,
         status=ContestStatus.ENDED,

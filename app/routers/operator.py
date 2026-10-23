@@ -155,6 +155,7 @@ class ContestSettingsUpdateRequest(BaseModel):
     scoreboard_freeze_mode: ScoreboardFreezeMode | None = None
     scoreboard_release_mode: ScoreboardReleaseMode | None = None
     mock_judging_enabled: bool | None = None
+    freeze_submission_count_visible: bool | None = None
     participant_progress_visible: bool | None = None
     mock_judging_progress_visible: bool | None = None
     emergency_notice: str | None = None

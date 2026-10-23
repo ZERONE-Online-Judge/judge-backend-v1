@@ -301,6 +301,8 @@ def create_schema() -> None:
                     connection.execute(text("UPDATE contests SET scoreboard_frozen_at = CURRENT_TIMESTAMP WHERE scoreboard_freeze_mode = 'frozen'"))
                 if "mock_judging_enabled" not in columns:
                     connection.execute(text("ALTER TABLE contests ADD COLUMN mock_judging_enabled BOOLEAN DEFAULT 0 NOT NULL"))
+                if "freeze_submission_count_visible" not in columns:
+                    connection.execute(text("ALTER TABLE contests ADD COLUMN freeze_submission_count_visible BOOLEAN DEFAULT 0 NOT NULL"))
                 if "participant_progress_visible" not in columns:
                     connection.execute(text("ALTER TABLE contests ADD COLUMN participant_progress_visible BOOLEAN DEFAULT 1 NOT NULL"))
                 if "mock_judging_progress_visible" not in columns:

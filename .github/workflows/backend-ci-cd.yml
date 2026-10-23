@@ -103,6 +103,9 @@ jobs:
       - name: Verify board policy changes with PostgreSQL row locks
         run: DATABASE_URL="$EDITOR_JUDGE_TEST_DATABASE_URL" python -m pytest -q tests/test_board_policy.py tests/test_contest_sharing.py
 
+      - name: Verify frozen privacy and atomic resolver with PostgreSQL
+        run: DATABASE_URL="$EDITOR_JUDGE_TEST_DATABASE_URL" python -m pytest -q tests/test_freeze_count_policy.py tests/test_scoreboard_release_modes.py tests/test_scoreboard_release_undo.py
+
   playground-test:
     name: Playground Isolation
     runs-on: ubuntu-latest
