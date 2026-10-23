@@ -61,6 +61,10 @@ class LoginOptions(BaseModel):
     email: EmailStr
 
 
+class LoginTransfer(LoginOptions):
+    proof_token: str = Field(min_length=32, max_length=128)
+
+
 class Removal(BaseModel):
     model_config = ConfigDict(extra="forbid")
     credential_id: str = Field(min_length=1, max_length=1024)
@@ -143,6 +147,18 @@ def login(payload: Authentication, request: Request, response: Response):
         if exc.code == "invalid_passkey":
             raise AppError(401, exc.code, exc.message)
         raise
+    return finish_passkey_login(request, response, session, payload.force_new_session)
+
+
+@router.post("/passkeys/login/transfer")
+def transfer_login(payload: LoginTransfer, request: Request, response: Response):
+    session = passkeys.confirm_login_transfer(
+        str(payload.email), payload.proof_token, request.client.host
+    )
+    return finish_passkey_login(request, response, session, True)
+
+
+def finish_passkey_login(request, response, session, force_new_session):
     from app.services.shared_login import COOKIE, set_cookie
 
     set_cookie(response, session["refresh_token"], request.cookies.get(COOKIE))
@@ -153,7 +169,7 @@ def login(payload: Authentication, request: Request, response: Response):
         account_scope="general",
         email=session["account"]["email"],
         actor_role=general_role(session),
-        details={"method": "passkey", "force_new_session": payload.force_new_session},
+        details={"method": "passkey", "force_new_session": force_new_session},
     )
     return ok(request, session)
 
