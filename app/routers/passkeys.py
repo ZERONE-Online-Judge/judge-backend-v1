@@ -1,9 +1,17 @@
 """Passkey management uses bearer authentication, never an ambient SSO cookie."""
 
 import json
+from typing import Literal
 from fastapi import APIRouter, Request, Response
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
-from app.services import passkeys, login_security
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    field_validator,
+    model_validator,
+)
+from app.services import passkeys, login_security, password_passkeys
 from app.services.access_logging import write_access_log, general_role
 from app.services.authz import bearer_token
 from app.services.errors import AppError
@@ -169,3 +177,86 @@ def verify_email(payload: EmailVerification, request: Request):
             request.client.host,
         ),
     )
+
+
+class PasswordScope(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    purpose: Literal["set", "reset"]
+    email: EmailStr | None = None
+
+    @model_validator(mode="after")
+    def reset_email_required(self):
+        if self.purpose == "reset" and self.email is None:
+            raise ValueError("Email is required for password reset")
+        return self
+
+
+class PasswordVerification(Ceremony, PasswordScope):
+    pass
+
+
+class PasswordPasskeyConfirm(PasswordScope):
+    proof_token: str = Field(min_length=32, max_length=128)
+    new_password: str = Field(min_length=8, max_length=128)
+
+    @field_validator("new_password")
+    @classmethod
+    def valid_password(cls, value):
+        from app.services.account_passwords import validate_password
+
+        return validate_password(value)
+
+
+@router.post("/password/passkey/options")
+def password_options(payload: PasswordScope, request: Request):
+    return ok(
+        request,
+        password_passkeys.options(
+            bearer_token(request),
+            str(payload.email) if payload.email else None,
+            payload.purpose,
+            request.client.host,
+        ),
+    )
+
+
+@router.post("/password/passkey/verify")
+def password_verify(payload: PasswordVerification, request: Request):
+    return ok(
+        request,
+        password_passkeys.verify(
+            bearer_token(request),
+            str(payload.email) if payload.email else None,
+            payload.purpose,
+            payload.challenge_id,
+            payload.credential,
+            request.client.host,
+        ),
+    )
+
+
+@router.post("/password/passkey/confirm")
+def password_confirm(
+    payload: PasswordPasskeyConfirm, request: Request, response: Response
+):
+    email, result = password_passkeys.confirm(
+        bearer_token(request),
+        str(payload.email) if payload.email else None,
+        payload.purpose,
+        payload.proof_token,
+        payload.new_password,
+        request.client.host,
+    )
+    from app.services.shared_login import clear_cookie
+
+    clear_cookie(response)
+    write_access_log(
+        request,
+        event_type=(
+            "password_reset" if payload.purpose == "reset" else "password_changed"
+        ),
+        account_scope="general",
+        email=email,
+        details={"method": "passkey"},
+    )
+    return ok(request, result)
