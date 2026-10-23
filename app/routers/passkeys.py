@@ -2,7 +2,7 @@
 
 import json
 from fastapi import APIRouter, Request, Response
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 from app.services import passkeys, login_security
 from app.services.access_logging import write_access_log, general_role
 from app.services.authz import bearer_token
@@ -46,6 +46,11 @@ class Registration(Ceremony):
 
 class Authentication(Ceremony):
     force_new_session: bool = False
+
+
+class LoginOptions(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    email: EmailStr
 
 
 class Removal(BaseModel):
@@ -98,8 +103,10 @@ def remove(payload: Removal, request: Request):
 
 
 @router.post("/passkeys/login/options")
-def login_options(request: Request):
-    return ok(request, passkeys.authentication_options(request.client.host))
+def login_options(request: Request, payload: LoginOptions | None = None):
+    # Older clients can finish signing in during the rolling frontend upgrade.
+    email = str(payload.email).lower() if payload else None
+    return ok(request, passkeys.authentication_options(request.client.host, email))
 
 
 @router.post("/passkeys/login/verify")

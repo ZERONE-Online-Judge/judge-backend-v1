@@ -636,3 +636,125 @@ def test_shared_campus_ip_can_start_more_than_sixty_independent_logins(browser):
         assert response.status_code == 200, response.text
         data = response.json()["data"]
         assert data["options"]["allowCredentials"] == []
+
+
+def test_email_first_lookup_and_bound_passkey_login(browser):
+    c = browser
+    email, headers, _ = login(c)
+    auth = enroll(c, headers)
+    other_email, other_headers, _ = login(c)
+    other_auth = enroll(c, other_headers)
+    with SessionLocal() as db:
+        db.add(
+            AccountPasswordRow(
+                email=email,
+                password_hash=hash_password(PASSWORD),
+                updated_at=int(time.time()),
+            )
+        )
+        db.commit()
+    methods = c.post(PREFIX + "/login-options", json={"email": email.upper()})
+    assert methods.status_code == 200, methods.text
+    assert methods.json()["data"] == {
+        "password_available": True,
+        "passkey_available": True,
+    }
+    response = c.post(PREFIX + "/passkeys/login/options", json={"email": email.upper()})
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert [row["id"] for row in data["options"]["allowCredentials"]] == [b64(auth.id)]
+    assert "user" not in data["options"]
+    with SessionLocal() as db:
+        assert db.get(SecurityChallengeRow, token_hash(data["challenge_id"])).email == email
+    # A valid signature from another registered account must not bypass binding,
+    # even if a malicious client ignores the server-provided allow list.
+    wrong = c.post(
+        PREFIX + "/passkeys/login/verify",
+        json={
+            "challenge_id": data["challenge_id"],
+            "credential": other_auth.assertion(data["options"]),
+            "force_new_session": True,
+        },
+    )
+    assert wrong.status_code == 401, wrong.text
+    data = c.post(PREFIX + "/passkeys/login/options", json={"email": email}).json()[
+        "data"
+    ]
+    result = c.post(
+        PREFIX + "/passkeys/login/verify",
+        json={
+            "challenge_id": data["challenge_id"],
+            "credential": auth.assertion(data["options"]),
+            "force_new_session": True,
+        },
+    )
+    assert result.status_code == 200, result.text
+    assert result.json()["data"]["account"]["email"] == email
+    assert result.json()["data"]["account"]["email"] != other_email
+
+
+@pytest.mark.parametrize(
+    "payload", [{}, {"email": ""}, {"email": "not-an-email"}, {"email": None}]
+)
+def test_bound_options_reject_invalid_email_body(browser, payload):
+    assert (
+        browser.post(PREFIX + "/passkeys/login/options", json=payload).status_code
+        == 422
+    )
+
+
+def test_bound_options_do_not_fall_back_to_unrestricted_credentials(browser):
+    c = browser
+    email, _, _ = login(c)
+    for address in [email, f"missing-{uuid4().hex}@example.com"]:
+        result = c.post(PREFIX + "/passkeys/login/options", json={"email": address})
+        assert result.status_code == 400
+        assert result.json()["error"]["code"] == "passkey_unavailable"
+
+
+def test_bound_options_reject_a_credential_deleted_after_challenge(browser):
+    c = browser
+    email, headers, _ = login(c)
+    auth = enroll(c, headers)
+    data = c.post(PREFIX + "/passkeys/login/options", json={"email": email}).json()[
+        "data"
+    ]
+    assert (
+        c.post(
+            PREFIX + "/passkeys/remove",
+            headers=headers,
+            json={"credential_id": b64(auth.id)},
+        ).status_code
+        == 200
+    )
+    result = c.post(
+        PREFIX + "/passkeys/login/verify",
+        json={
+            "challenge_id": data["challenge_id"],
+            "credential": auth.assertion(data["options"]),
+            "force_new_session": True,
+        },
+    )
+    assert result.status_code == 401
+
+
+def test_email_first_lookup_accepts_shared_ip_but_limits_one_email(browser):
+    for _ in range(65):
+        response = browser.post(
+            PREFIX + "/login-options", json={"email": f"{uuid4().hex}@example.com"}
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["data"] == {
+            "password_available": False,
+            "passkey_available": False,
+        }
+    email = f"{uuid4().hex}@example.com"
+    for _ in range(10):
+        assert (
+            browser.post(PREFIX + "/login-options", json={"email": email}).status_code
+            == 200
+        )
+    assert (
+        browser.post(PREFIX + "/login-options", json={"email": email}).status_code
+        == 429
+    )

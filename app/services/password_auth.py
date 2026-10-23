@@ -4,7 +4,12 @@ import secrets
 import time
 from sqlalchemy import delete, select, update
 from app.database import SessionLocal
-from app.orm_models import AccountPasswordRow, PasswordChallengeRow
+from app.orm_models import (
+    AccountPasswordRow,
+    PasswordChallengeRow,
+    IdentityAccountRow,
+    PasskeyRow,
+)
 from app.services.account_passwords import hash_password, verify_password
 from app.services.auth_rate_limit import consume
 from app.services.errors import AppError
@@ -27,10 +32,28 @@ def has_password(email):
 
 
 def login_options(email, client_ip):
-    # Disclose only the requested login method, never account roles or profile.
-    consume("login-options-ip", client_ip, 60, 60)
+    # Shared campus IPs must accommodate the common first login step.
+    # Return available methods only, never account roles or profile.
+    email = email.strip().lower()
+    consume("login-options-ip", client_ip, 1200, 300)
     consume("login-options-email", email, 10, 60)
-    return {"password_available": has_password(email)}
+    with SessionLocal() as db:
+        passkey_available = (
+            db.scalar(
+                select(PasskeyRow.credential_id)
+                .join(
+                    IdentityAccountRow,
+                    PasskeyRow.account_id == IdentityAccountRow.account_id,
+                )
+                .where(IdentityAccountRow.email == email)
+                .limit(1)
+            )
+            is not None
+        )
+        return {
+            "password_available": db.get(AccountPasswordRow, email) is not None,
+            "passkey_available": passkey_available,
+        }
 
 
 def request_change(email, purpose, client_ip):
