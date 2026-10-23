@@ -9,7 +9,12 @@ keys and biometric data never enter the application.
 
 - After successful email OTP login, accounts without passkeys are offered
   enrollment. Skipping or cancelling leaves the authenticated session usable.
-- The login page offers passkey sign-in without first disclosing an email.
+- The login page first asks only for an email. The next step prefers a
+  registered passkey on supported browsers, otherwise a registered password,
+  otherwise an email code. Other available methods stay on the same card.
+- Password login from an unfamiliar browser/IP automatically requests an email
+  code. A registered passkey can complete verification instead. Switching to
+  another email resets the selected methods and verification state.
 - My account → Passkey management lists credentials and their last use,
   supports adding up to ten credentials, and confirms deletion.
 - Adding/deleting credentials requires a strong verification within five
@@ -49,6 +54,15 @@ another RP. User verification and user presence are required, registration is
 bound to the active session/account, and assertions verify the account's user
 handle, challenge, RP ID, origin, signature, flags and signature counter.
 Synced passkeys with zero counters are supported by the standard verifier.
+
+New login clients send the selected email when requesting passkey options.
+The server restricts allowed credentials to that account and stores the email
+in the challenge. Verification checks the credential owner's email against
+that stored value, so changing the browser's allowed list cannot switch accounts.
+Unknown emails and accounts without credentials return `passkey_unavailable`.
+Method lookup returns only password/passkey availability, with per-email and
+shared-IP limits. Legacy requests without a body remain supported during the
+rolling frontend upgrade; they retain the original discoverable login behavior.
 
 Challenges expire after five minutes, are DB-backed across workers, and are
 atomically consumed even on a failed signature. Management email codes are

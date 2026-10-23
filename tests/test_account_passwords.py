@@ -51,19 +51,20 @@ def test_password_comparison_is_case_sensitive_and_keeps_legacy_credentials():
     assert verify_password(legacy, old_hash)
 
 
-def test_login_options_only_returns_the_password_method(context):
+def test_login_options_only_returns_available_methods(context):
     email = email_for(context)
     result = client.post("/api/auth/general/login-options", json={"email": email})
     assert result.status_code == 200 and result.json()["data"] == {
-        "password_available": False
+        "password_available": False,
+        "passkey_available": False
     }
     register(context)
     assert client.post("/api/auth/general/login-options", json={"email": email}).json()[
         "data"
-    ] == {"password_available": True}
+    ] == {"password_available": True, "passkey_available": False}
     assert client.post(
         "/api/auth/general/login-options", json={"email": uuid4().hex + "@example.com"}
-    ).json()["data"] == {"password_available": False}
+    ).json()["data"] == {"password_available": False, "passkey_available": False}
 
 
 def code_for(email):

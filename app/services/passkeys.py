@@ -238,18 +238,42 @@ def register(token, challenge_id, credential, name):
     return {"registered": True}
 
 
-def authentication_options(client_ip):
+def authentication_options(client_ip, email=None):
     # Contest participants commonly share a campus/NAT IP.
     consume("passkey-login-ip", client_ip, 1200, 300)
     rp, _ = relying_party()
-    options = generate_authentication_options(
-        rp_id=rp, timeout=120000, user_verification=UserVerificationRequirement.REQUIRED
-    )
     with SessionLocal() as db:
-        challenge_id = new_challenge(
-            db, "authenticate", bytes_to_base64url(options.challenge)
+        allowed = None
+        if email is not None:
+            email = email.strip().lower()
+            consume("passkey-login-email", email, 20, 300)
+            rows = db.scalars(
+                select(PasskeyRow)
+                .join(
+                    IdentityAccountRow,
+                    PasskeyRow.account_id == IdentityAccountRow.account_id,
+                )
+                .where(IdentityAccountRow.email == email)
+            ).all()
+            if not rows:
+                raise AppError(
+                    400,
+                    "passkey_unavailable",
+                    "등록된 패스키가 없습니다. 이메일 인증으로 로그인해 주세요.",
+                )
+            allowed = [
+                PublicKeyCredentialDescriptor(id=base64url_to_bytes(row.credential_id))
+                for row in rows
+            ]
+        options = generate_authentication_options(
+            rp_id=rp,
+            timeout=120000,
+            user_verification=UserVerificationRequirement.REQUIRED,
+            allow_credentials=allowed,
         )
-    # Discoverable credentials: no email lookup or account existence disclosure.
+        challenge_id = new_challenge(
+            db, "authenticate", bytes_to_base64url(options.challenge), email=email
+        )
     return {
         "challenge_id": challenge_id,
         "options": json.loads(options_to_json(options)),
@@ -288,6 +312,7 @@ def authenticate(challenge_id, credential, force_new_session, client_ip):
             user_handle = credential.get("response", {}).get("userHandle")
             if (
                 not account
+                or (challenge.email is not None and account.email != challenge.email)
                 or not user_handle
                 or base64url_to_bytes(user_handle) != account.account_id.encode()
             ):
