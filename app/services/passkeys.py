@@ -370,9 +370,102 @@ def authenticate(challenge_id, credential, force_new_session, client_ip):
             raise invalid()
         conflict = store._active_login_session_summary(db, email)
         if conflict and not force_new_session:
-            raise SessionConflictError(conflict)
+            transfer_token = new_challenge(
+                db,
+                "login-transfer",
+                json.dumps(
+                    {
+                        "account_id": account.account_id,
+                        "credential_id": live.credential_id,
+                        "ip_hash": token_hash(client_ip),
+                        "sessions": active_session_ids(db, email),
+                    }
+                ),
+                email=email,
+            )
+            raise SessionConflictError({**conflict, "transfer_token": transfer_token})
         if conflict:
             store._revoke_active_login_sessions_for_email(db, email)
+        return store._issue_general_session(db, email, profile, strongly_verified=True)
+
+
+def active_session_ids(db, email):
+    from app.services.store import store
+
+    return sorted(
+        [
+            "general:" + row.general_session_id
+            for row in store._active_general_session_rows(db, email)
+        ]
+        + [
+            "team:" + row.team_session_id
+            for row in store._active_team_session_rows_for_email(db, email)
+        ]
+    )
+
+
+def confirm_login_transfer(email, proof_token, client_ip):
+    """Consume a verified assertion's approval atomically with session issuance."""
+    from app.services.store import store
+
+    email = email.lower()
+    consume("passkey-transfer-ip", client_ip, 1200, 300)
+    with SessionLocal() as db:
+        # Use the same account-first lock order as key removal/password changes.
+        account = db.scalar(
+            select(IdentityAccountRow)
+            .where(IdentityAccountRow.email == email)
+            .with_for_update()
+        )
+        proof = db.scalar(
+            select(SecurityChallengeRow)
+            .where(SecurityChallengeRow.token_hash == token_hash(proof_token))
+            .with_for_update()
+        )
+        at = int(time.time())
+        if (
+            not account
+            or not proof
+            or proof.purpose != "login-transfer"
+            or proof.email != email
+            or proof.session_id is not None
+            or proof.expires_at <= at
+        ):
+            raise invalid()
+        context = json.loads(proof.challenge)
+        key = db.scalar(
+            select(PasskeyRow)
+            .where(PasskeyRow.credential_id == context["credential_id"])
+            .with_for_update()
+        )
+        if (
+            context["account_id"] != account.account_id
+            or not key
+            or key.account_id != account.account_id
+            or not hmac.compare_digest(context["ip_hash"], token_hash(client_ip))
+        ):
+            raise invalid()
+        # Logging out/expiry is harmless; a newly issued session needs new consent.
+        if not set(active_session_ids(db, email)).issubset(context["sessions"]):
+            db.delete(proof)
+            db.commit()
+            raise AppError(
+                409,
+                "session_changed",
+                "로그인 상태가 변경되었습니다. 다시 로그인해 주세요.",
+            )
+        profile = store._general_profile(db, email, issue_operator_session=False)
+        if not profile:
+            raise invalid()
+        consumed = db.execute(
+            delete(SecurityChallengeRow).where(
+                SecurityChallengeRow.token_hash == proof.token_hash,
+                SecurityChallengeRow.expires_at > int(time.time()),
+            )
+        )
+        if not consumed.rowcount:
+            raise invalid()
+        store._revoke_active_login_sessions_for_email(db, email)
         return store._issue_general_session(db, email, profile, strongly_verified=True)
 
 
@@ -395,7 +488,13 @@ def remove(token, credential_id):
             delete(SecurityChallengeRow).where(
                 SecurityChallengeRow.email == account.email,
                 SecurityChallengeRow.purpose.in_(
-                    ["pwd-set", "pwd-reset", "pwd-set-proof", "pwd-reset-proof"]
+                    [
+                        "pwd-set",
+                        "pwd-reset",
+                        "pwd-set-proof",
+                        "pwd-reset-proof",
+                        "login-transfer",
+                    ]
                 ),
             )
         )
