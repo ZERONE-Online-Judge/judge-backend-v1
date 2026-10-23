@@ -102,23 +102,45 @@ def session_context(db, token, *, fresh=False):
     if not session or _aware(session.access_expires_at) <= now_utc():
         raise AppError(401, "authentication_required", "다시 로그인해 주세요.")
     if fresh:
-        # Account -> session -> credential is the common management lock order.
-        db.scalar(
-            select(IdentityAccountRow)
-            .where(IdentityAccountRow.email == session.email.lower())
-            .with_for_update()
-        )
-        session = db.scalar(
-            select(GeneralSessionRow)
-            .where(GeneralSessionRow.general_session_id == session.general_session_id)
-            .with_for_update()
-            .execution_options(populate_existing=True)
-        )
-        if session.revoked_at or _aware(session.access_expires_at) <= now_utc():
-            raise AppError(401, "authentication_required", "다시 로그인해 주세요.")
+        return recheck_verified_session(db, session.general_session_id, session.email)
     proof = db.get(SessionVerificationRow, session.general_session_id)
     recent = bool(proof and proof.verified_at > int(time.time()) - FRESH_SECONDS)
-    if fresh and not recent:
+    return session, recent
+
+
+def recheck_verified_session(db, session_id, email):
+    """Recheck an already authenticated request across internal commits.
+
+    Rotating an access token does not replace its authenticated session. Keep
+    checking revocation, expiry and strong verification on that exact session.
+    This helper never authenticates a request from a client-provided session ID.
+    """
+    from app.services.store import _aware
+
+    # Account -> session -> credential is the common management lock order.
+    db.scalar(
+        select(IdentityAccountRow)
+        .where(IdentityAccountRow.email == email.lower())
+        .with_for_update()
+    )
+    session = db.scalar(
+        select(GeneralSessionRow)
+        .where(
+            GeneralSessionRow.general_session_id == session_id,
+            GeneralSessionRow.email == email,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if (
+        not session
+        or session.revoked_at
+        or _aware(session.access_expires_at) <= now_utc()
+    ):
+        raise AppError(401, "authentication_required", "다시 로그인해 주세요.")
+    proof = db.get(SessionVerificationRow, session_id, populate_existing=True)
+    recent = bool(proof and proof.verified_at > int(time.time()) - FRESH_SECONDS)
+    if not recent:
         raise AppError(
             403,
             "recent_verification_required",

@@ -76,12 +76,9 @@ class EmailVerification(BaseModel):
     code: str = Field(pattern=r"^[0-9]{6}$")
 
 
-def log_management(request, event):
-    from app.database import SessionLocal
-
-    with SessionLocal() as db:
-        session, _ = login_security.session_context(db, bearer_token(request))
-        email = session.email
+def log_management(request, event, email):
+    # Use the actor verified by the committed operation. A token rotation while
+    # writing its audit record must not turn a successful mutation into a 401.
     write_access_log(request, event_type=event, account_scope="general", email=email)
 
 
@@ -100,17 +97,17 @@ def register_options(request: Request):
 
 @router.post("/passkeys/register/verify")
 def register(payload: Registration, request: Request):
-    result = passkeys.register(
+    email, result = passkeys.register(
         bearer_token(request), payload.challenge_id, payload.credential, payload.name
     )
-    log_management(request, "passkey_registered")
+    log_management(request, "passkey_registered", email)
     return ok(request, result)
 
 
 @router.post("/passkeys/remove")
 def remove(payload: Removal, request: Request):
-    result = passkeys.remove(bearer_token(request), payload.credential_id)
-    log_management(request, "passkey_removed")
+    email, result = passkeys.remove(bearer_token(request), payload.credential_id)
+    log_management(request, "passkey_removed", email)
     return ok(request, result)
 
 

@@ -808,3 +808,215 @@ def test_bound_login_handles_optional_user_handle_safely(browser, handle):
     ), result.text
     if result.status_code == 200:
         assert result.json()["data"]["account"]["email"] == email
+
+
+def test_registration_success_survives_session_rotation_before_access_logging(
+    browser, monkeypatch
+):
+    from app.services import passkeys
+
+    email, headers, session = login(browser)
+    options = browser.post(
+        PREFIX + "/passkeys/register/options", headers=headers
+    ).json()["data"]
+    auth = Authenticator()
+    original_notify = passkeys.notify
+
+    def rotate_after_commit(account_email, action):
+        original_notify(account_email, action)
+        assert store.refresh_general_session(session["refresh_token"])
+
+    monkeypatch.setattr(passkeys, "notify", rotate_after_commit)
+    result = browser.post(
+        PREFIX + "/passkeys/register/verify",
+        headers=headers,
+        json={
+            "challenge_id": options["challenge_id"],
+            "credential": auth.register(options["options"]),
+        },
+    )
+    assert result.status_code == 200, result.text
+    assert result.json()["data"] == {"registered": True}
+    from app.orm_models import AccessLogRow
+
+    with SessionLocal() as db:
+        assert db.get(PasskeyRow, b64(auth.id)) is not None
+        assert (
+            len(
+                db.scalars(
+                    select(AccessLogRow).where(
+                        AccessLogRow.email == email,
+                        AccessLogRow.event_type == "passkey_registered",
+                    )
+                ).all()
+            )
+            == 1
+        )
+        assert (
+            len(
+                db.scalars(
+                    select(MailQueueItemRow).where(
+                        MailQueueItemRow.recipient_email == email,
+                        MailQueueItemRow.mail_type == "account_security",
+                    )
+                ).all()
+            )
+            == 1
+        )
+    # Keep nonce replay protection and verify the saved key really signs in.
+    assert (
+        browser.post(
+            PREFIX + "/passkeys/register/verify",
+            headers={
+                "Authorization": "Bearer "
+                + store.refresh_general_session(session["refresh_token"])[
+                    "access_token"
+                ]
+            },
+            json={
+                "challenge_id": options["challenge_id"],
+                "credential": auth.register(options["options"]),
+            },
+        ).status_code
+        == 400
+    )
+    result = browser.post(
+        PREFIX + "/passkeys/login/verify",
+        json={**assertion(browser, auth), "force_new_session": True},
+    )
+    assert result.status_code == 200, result.text
+
+
+@pytest.mark.parametrize(
+    "change, expected",
+    [("rotate", 200), ("revoke", 401), ("verification_expired", 403)],
+)
+def test_registration_rechecks_the_original_session_after_consuming_challenge(
+    browser, monkeypatch, change, expected
+):
+    from app.services import passkeys, login_security
+
+    email, headers, session = login(browser)
+    options = browser.post(
+        PREFIX + "/passkeys/register/options", headers=headers
+    ).json()["data"]
+    auth = Authenticator()
+    original_take = passkeys.take_challenge
+
+    def change_after_challenge(*args, **kwargs):
+        challenge = original_take(*args, **kwargs)
+        if change == "rotate":
+            assert store.refresh_general_session(session["refresh_token"])
+        elif change == "revoke":
+            assert store.revoke_general_session(None, session["refresh_token"])
+        else:
+            with SessionLocal() as db:
+                proof = db.get(SessionVerificationRow, challenge.session_id)
+                proof.verified_at = int(time.time()) - login_security.FRESH_SECONDS - 1
+                db.commit()
+        return challenge
+
+    monkeypatch.setattr(passkeys, "take_challenge", change_after_challenge)
+    result = browser.post(
+        PREFIX + "/passkeys/register/verify",
+        headers=headers,
+        json={
+            "challenge_id": options["challenge_id"],
+            "credential": auth.register(options["options"]),
+        },
+    )
+    assert result.status_code == expected, result.text
+    with SessionLocal() as db:
+        assert (db.get(PasskeyRow, b64(auth.id)) is not None) == (expected == 200)
+        notifications = db.scalars(
+            select(MailQueueItemRow).where(
+                MailQueueItemRow.recipient_email == email,
+                MailQueueItemRow.mail_type == "account_security",
+            )
+        ).all()
+        assert len(notifications) == (1 if expected == 200 else 0)
+
+
+def test_passkey_removal_success_survives_post_commit_session_rotation(
+    browser, monkeypatch
+):
+    from app.services import passkeys
+    from app.orm_models import AccessLogRow
+
+    email, headers, session = login(browser)
+    auth = enroll(browser, headers)
+    original_notify = passkeys.notify
+
+    def rotate_after_commit(account_email, action):
+        original_notify(account_email, action)
+        assert store.refresh_general_session(session["refresh_token"])
+
+    monkeypatch.setattr(passkeys, "notify", rotate_after_commit)
+    result = browser.post(
+        PREFIX + "/passkeys/remove",
+        headers=headers,
+        json={"credential_id": b64(auth.id)},
+    )
+    assert result.status_code == 200, result.text
+    assert result.json()["data"] == {"deleted": True}
+    with SessionLocal() as db:
+        assert db.get(PasskeyRow, b64(auth.id)) is None
+        logs = db.scalars(
+            select(AccessLogRow).where(
+                AccessLogRow.email == email,
+                AccessLogRow.event_type == "passkey_removed",
+            )
+        ).all()
+        assert len(logs) == 1
+
+
+@pytest.mark.parametrize("change,expected", [("rotate", 200), ("revoke", 401)])
+def test_registration_verification_with_parallel_postgresql_session_change(
+    browser, monkeypatch, change, expected
+):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    from app.database import engine
+    from app.services import passkeys
+
+    if engine.dialect.name != "postgresql":
+        pytest.skip("PostgreSQL row locks required")
+    _, headers, session = login(browser)
+    options = browser.post(
+        PREFIX + "/passkeys/register/options", headers=headers
+    ).json()["data"]
+    auth = Authenticator()
+    credential = auth.register(options["options"])
+    verifying, resume = Event(), Event()
+    original = passkeys.verify_registration_response
+
+    def pause_verification(*args, **kwargs):
+        result = original(*args, **kwargs)
+        verifying.set()
+        assert resume.wait(10)
+        return result
+
+    monkeypatch.setattr(passkeys, "verify_registration_response", pause_verification)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        request = pool.submit(
+            lambda: browser.post(
+                PREFIX + "/passkeys/register/verify",
+                headers=headers,
+                json={
+                    "challenge_id": options["challenge_id"],
+                    "credential": credential,
+                },
+            )
+        )
+        try:
+            assert verifying.wait(10)
+            if change == "rotate":
+                assert store.refresh_general_session(session["refresh_token"])
+            else:
+                assert store.revoke_general_session(None, session["refresh_token"])
+        finally:
+            resume.set()
+        result = request.result(timeout=10)
+    assert result.status_code == expected, result.text
+    with SessionLocal() as db:
+        assert (db.get(PasskeyRow, b64(auth.id)) is not None) == (expected == 200)

@@ -186,9 +186,8 @@ def register(token, challenge_id, credential, name):
     rp, origin = relying_party()
     with SessionLocal() as db:
         session, _ = login_security.session_context(db, token, fresh=True)
-        challenge = take_challenge(
-            db, challenge_id, "register", session.general_session_id
-        )
+        session_id, email = session.general_session_id, session.email
+        challenge = take_challenge(db, challenge_id, "register", session_id)
         try:
             if parse_client_data_json(
                 base64url_to_bytes(credential["response"]["clientDataJSON"])
@@ -204,7 +203,7 @@ def register(token, challenge_id, credential, name):
         except (WebAuthnException, ValueError, TypeError, KeyError):
             raise invalid()
         # Recheck live session and account after consuming/verifying the ceremony.
-        session, _ = login_security.session_context(db, token, fresh=True)
+        session, _ = login_security.recheck_verified_session(db, session_id, email)
         account = account_for(db, session)
         if account.email != challenge.email:
             raise invalid()
@@ -235,7 +234,7 @@ def register(token, challenge_id, credential, name):
             db.rollback()
             raise AppError(409, "passkey_exists", "이미 등록한 패스키입니다.")
     notify(account.email, "등록")
-    return {"registered": True}
+    return account.email, {"registered": True}
 
 
 def authentication_options(
@@ -505,7 +504,7 @@ def remove(token, credential_id):
         )
         db.commit()
     notify(account.email, "삭제")
-    return {"deleted": True}
+    return account.email, {"deleted": True}
 
 
 def notify(email, action):
