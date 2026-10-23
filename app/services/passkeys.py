@@ -313,8 +313,11 @@ def authenticate(challenge_id, credential, force_new_session, client_ip):
             if (
                 not account
                 or (challenge.email is not None and account.email != challenge.email)
-                or not user_handle
-                or base64url_to_bytes(user_handle) != account.account_id.encode()
+                or (challenge.email is None and not user_handle)
+                or (
+                    user_handle is not None
+                    and base64url_to_bytes(user_handle) != account.account_id.encode()
+                )
             ):
                 raise invalid()
             result = verify_authentication_response(
