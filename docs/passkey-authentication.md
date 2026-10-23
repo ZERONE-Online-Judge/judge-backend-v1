@@ -59,7 +59,10 @@ New login clients send the selected email when requesting passkey options.
 The server restricts allowed credentials to that account and stores the email
 in the challenge. Verification checks the credential owner's email against
 that stored value, so changing the browser's allowed list cannot switch accounts.
-Unknown emails and accounts without credentials return `passkey_unavailable`.
+A bound login allows an omitted/null user handle, as WebAuthn permits for
+account-identified ceremonies; any supplied handle must match the account.
+Legacy discoverable login still requires the handle. Unknown emails and
+accounts without credentials return `passkey_unavailable`.
 Method lookup returns only password/passkey availability, with per-email and
 shared-IP limits. Legacy requests without a body remain supported during the
 rolling frontend upgrade; they retain the original discoverable login behavior.

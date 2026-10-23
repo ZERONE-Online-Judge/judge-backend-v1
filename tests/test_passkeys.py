@@ -269,6 +269,7 @@ def test_registration_rejects_wrong_origin_rp_and_missing_uv(browser, kwargs):
         "uv",
         "signature",
         "handle",
+        "missing-handle",
         "challenge",
         "counter",
         "unknown",
@@ -294,6 +295,8 @@ def test_assertion_rejects_tampering(browser, kind):
         payload["credential"]["response"]["signature"] = b64(b"invalid")
     if kind == "handle":
         payload["credential"]["response"]["userHandle"] = b64(b"other-account")
+    if kind == "missing-handle":
+        payload["credential"]["response"]["userHandle"] = None
     if kind == "unknown":
         payload["credential"]["id"] = b64(b"unknown")
     if kind == "challenge":
@@ -665,7 +668,10 @@ def test_email_first_lookup_and_bound_passkey_login(browser):
     assert [row["id"] for row in data["options"]["allowCredentials"]] == [b64(auth.id)]
     assert "user" not in data["options"]
     with SessionLocal() as db:
-        assert db.get(SecurityChallengeRow, token_hash(data["challenge_id"])).email == email
+        assert (
+            db.get(SecurityChallengeRow, token_hash(data["challenge_id"])).email
+            == email
+        )
     # A valid signature from another registered account must not bypass binding,
     # even if a malicious client ignores the server-provided allow list.
     wrong = c.post(
@@ -673,6 +679,20 @@ def test_email_first_lookup_and_bound_passkey_login(browser):
         json={
             "challenge_id": data["challenge_id"],
             "credential": other_auth.assertion(data["options"]),
+            "force_new_session": True,
+        },
+    )
+    assert wrong.status_code == 401, wrong.text
+    data = c.post(PREFIX + "/passkeys/login/options", json={"email": email}).json()[
+        "data"
+    ]
+    credential = other_auth.assertion(data["options"])
+    credential["response"]["userHandle"] = None
+    wrong = c.post(
+        PREFIX + "/passkeys/login/verify",
+        json={
+            "challenge_id": data["challenge_id"],
+            "credential": credential,
             "force_new_session": True,
         },
     )
@@ -758,3 +778,33 @@ def test_email_first_lookup_accepts_shared_ip_but_limits_one_email(browser):
         browser.post(PREFIX + "/login-options", json={"email": email}).status_code
         == 429
     )
+
+
+@pytest.mark.parametrize("handle", [None, "omitted", "", "wrong"])
+def test_bound_login_handles_optional_user_handle_safely(browser, handle):
+    c = browser
+    email, headers, _ = login(c)
+    auth = enroll(c, headers)
+    data = c.post(PREFIX + "/passkeys/login/options", json={"email": email}).json()[
+        "data"
+    ]
+    credential = auth.assertion(data["options"])
+    if handle == "omitted":
+        credential["response"].pop("userHandle")
+    else:
+        credential["response"]["userHandle"] = (
+            b64(b"other-account") if handle == "wrong" else handle
+        )
+    result = c.post(
+        PREFIX + "/passkeys/login/verify",
+        json={
+            "challenge_id": data["challenge_id"],
+            "credential": credential,
+            "force_new_session": True,
+        },
+    )
+    assert result.status_code == (
+        200 if handle in (None, "omitted") else 401
+    ), result.text
+    if result.status_code == 200:
+        assert result.json()["data"]["account"]["email"] == email
