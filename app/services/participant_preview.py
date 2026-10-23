@@ -195,15 +195,22 @@ def preview_questions(participant: dict) -> list[ContestQuestion]:
                 continue
             question = ContestQuestion.model_validate_json(row.payload)
             questions[question.contest_question_id] = question
+    from app.services.board_policy import effective_comment_scope
+    contest = store.get_contest(contest_id)
+    for question in questions.values():
+        question.effective_comment_scope = effective_comment_scope(contest, question)
     return sorted(questions.values(), key=lambda question: question.created_at, reverse=True)
 
 
-def create_preview_question(participant: dict, title: str, body: str, visibility: str):
+def create_preview_question(participant: dict, title: str, body: str, visibility: str | None = None, comment_scope: str | None = None):
+    from app.services.board_policy import question_options
+    from app.services.store import store
+    visibility, comment_scope = question_options(store.get_contest(participant["team"].contest_id), visibility, comment_scope)
     question = ContestQuestion(
         contest_id=participant["team"].contest_id,
         participant_team_id=participant["team"].participant_team_id,
         team_member_id=participant["member"].team_member_id, title=title, body=body,
-        visibility=visibility, team_name=participant["team"].team_name,
+        visibility=visibility, comment_scope=comment_scope, effective_comment_scope=comment_scope, team_name=participant["team"].team_name,
         division_name=participant["division"].name, author_name=participant["member"].name,
         author_email=participant["member"].email,
     )
@@ -221,6 +228,9 @@ def create_preview_answer(participant: dict, question_id: str, body: str):
     question = next((item for item in preview_questions(participant) if item.contest_question_id == question_id), None)
     if not question:
         return None
+    from app.services.board_policy import require_participant_comment
+    from app.services.store import store
+    require_participant_comment(store.get_contest(question.contest_id), question)
     answer = ContestQuestionAnswer(
         contest_question_id=question_id, contest_id=question.contest_id, body=body,
         created_by_email=participant["member"].email, created_by_name=participant["member"].name,

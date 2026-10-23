@@ -280,6 +280,14 @@ def create_schema() -> None:
                     connection.execute(text("ALTER TABLE contests ADD COLUMN board_access_after_end VARCHAR(32) DEFAULT 'participants' NOT NULL"))
                 if "board_write_after_end" not in columns:
                     connection.execute(text("ALTER TABLE contests ADD COLUMN board_write_after_end BOOLEAN DEFAULT 0 NOT NULL"))
+                for field, default in (
+                    ("board_question_visibility_policy", "choice"),
+                    ("board_question_default_visibility", "public"),
+                    ("board_comment_scope_policy", "choice"),
+                    ("board_comment_default_scope", "all"),
+                ):
+                    if field not in columns:
+                        connection.execute(text(f"ALTER TABLE contests ADD COLUMN {field} VARCHAR(16) DEFAULT '{default}' NOT NULL"))
                 if "notice_access_after_end" not in columns:
                     connection.execute(text("ALTER TABLE contests ADD COLUMN notice_access_after_end VARCHAR(32) DEFAULT 'public' NOT NULL"))
                 if "editorial_access_after_end" not in columns:
@@ -297,6 +305,10 @@ def create_schema() -> None:
                     connection.execute(text("ALTER TABLE contests ADD COLUMN participant_progress_visible BOOLEAN DEFAULT 1 NOT NULL"))
                 if "mock_judging_progress_visible" not in columns:
                     connection.execute(text("ALTER TABLE contests ADD COLUMN mock_judging_progress_visible BOOLEAN DEFAULT 0 NOT NULL"))
+        if "contest_questions" in inspector.get_table_names():
+            if "comment_scope" not in {column["name"] for column in inspector.get_columns("contest_questions")}:
+                with engine.begin() as connection:
+                    connection.execute(text("ALTER TABLE contest_questions ADD COLUMN comment_scope VARCHAR(16) DEFAULT 'all' NOT NULL"))
         if "scoreboard_releases" in inspector.get_table_names():
             columns = {column["name"] for column in inspector.get_columns("scoreboard_releases")}
             with engine.begin() as connection:
