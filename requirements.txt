@@ -12,4 +12,5 @@ pytest==8.3.5
 httpx==0.28.1
 resend==2.30.1
 redis==6.4.0
+webauthn==3.0.1
 tiktoken==0.12.0

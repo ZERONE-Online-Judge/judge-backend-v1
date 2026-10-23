@@ -150,11 +150,14 @@ def confirm_change(email, purpose, code, password, client_ip):
             delete(PasswordChallengeRow).where(PasswordChallengeRow.email == email)
         )
         store._revoke_active_login_sessions_for_email(db, email)
+        from app.orm_models import TrustedEnvironmentRow, SecurityChallengeRow
+        db.execute(delete(TrustedEnvironmentRow).where(TrustedEnvironmentRow.email == email))
+        db.execute(delete(SecurityChallengeRow).where(SecurityChallengeRow.email == email))
         db.commit()
     return {"changed": True, "sessions_revoked": True}
 
 
-def login(email, password, force_new_session, client_ip):
+def login(email, password, force_new_session, client_ip, device_token=None):
     email = email.lower()
     consume("pwd-login-ip", client_ip, 200, 300)
     consume("pwd-login-email", email, 10, 300)
@@ -175,6 +178,9 @@ def login(email, password, force_new_session, client_ip):
         profile = store._general_profile(db, email, issue_operator_session=False)
         if not profile:
             return None
+        from app.services.login_security import is_trusted
+        if not is_trusted(db, email, device_token, client_ip):
+            raise AppError(403, "additional_verification_required", "새로운 브라우저 또는 IP입니다. 이메일 인증이나 패스키로 로그인해 주세요.")
         conflict = store._active_login_session_summary(db, email)
         if conflict and not force_new_session:
             raise SessionConflictError(conflict)

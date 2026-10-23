@@ -1952,7 +1952,7 @@ class DbStore:
             "operator_session": operator_session,
         }
 
-    def _issue_general_session(self, db: Session, email: str, profile: dict) -> dict:
+    def _issue_general_session(self, db: Session, email: str, profile: dict, *, strongly_verified: bool = False) -> dict:
         from app.orm_models import IdentityAccountRow
         identity = db.scalar(select(IdentityAccountRow).where(IdentityAccountRow.email == email.lower()))
         if not identity:
@@ -1973,6 +1973,11 @@ class DbStore:
                 last_seen_at=issued_at,
             )
         )
+        if strongly_verified:
+            db.flush()
+            from app.services.login_security import mark_verified
+            session_id = db.scalar(select(GeneralSessionRow.general_session_id).where(GeneralSessionRow.access_token_hash == token_hash(access_token)))
+            mark_verified(db, session_id)
         db.commit()
         with self._session() as fresh_db:
             fresh_profile = self._general_profile(fresh_db, email, issue_operator_session=True)
@@ -2093,7 +2098,7 @@ class DbStore:
                         return None
                 else:
                     otp.verified_at = now_utc()
-            return self._issue_general_session(db, email, profile)
+            return self._issue_general_session(db, email, profile, strongly_verified=not demo_bypass)
 
     def get_general_by_access_token(self, access_token: str) -> dict | None:
         if not _valid_session_token(access_token, "general_access"):

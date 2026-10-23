@@ -12,7 +12,9 @@ def test_sqlite_inbox_upgrade_and_downgrade(tmp_path, monkeypatch):
     Base.metadata.create_all(engine, tables=[table for table in Base.metadata.sorted_tables
         if table.name not in {'rejudgings', 'rejudging_items', 'notifications',
             'editor_bridge_nonces', 'editor_problem_imports', 'auth_rate_limits',
-            'identity_accounts', 'account_passwords', 'password_challenges'}])
+            'identity_accounts', 'account_passwords', 'password_challenges',
+            'account_passkeys', 'security_challenges', 'session_verifications',
+            'trusted_login_environments'}])
     with engine.begin() as db:
         db.execute(text('DROP INDEX IF EXISTS ix_team_members_email_lower'))
     monkeypatch.setattr(settings, 'database_url', url)

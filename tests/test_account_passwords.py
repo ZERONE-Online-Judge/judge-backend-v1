@@ -13,7 +13,10 @@ from app.orm_models import (
 )
 from app.services.account_passwords import verify_password, validate_password, hash_password, ROUNDS
 from app.services.store import store
-from test_problem_archives import client, context
+from test_problem_archives import context
+from fastapi.testclient import TestClient
+from app.main import app
+client = TestClient(app, client=("203.0.113.20", 50000))
 from test_editor_bridge import email_for
 
 PASSWORD = "ZojTes1!"
@@ -113,6 +116,8 @@ def test_set_password_revoke_all_sessions_and_password_login_preserves_conflicts
         )
         assert db.get(PasswordChallengeRow, (email, "set")) is None
     values = {"email": email, "password": PASSWORD}
+    assert client.post("/api/auth/general/password/login", json=values).status_code == 403
+    authenticate_environment(email)
     first = client.post("/api/auth/general/password/login", json=values)
     assert first.status_code == 200, first.text
     token = first.json()["data"]["access_token"]
@@ -188,13 +193,9 @@ def test_reset_uses_independent_single_use_proof_and_hides_registration(context)
         ).status_code
         == 401
     )
-    assert (
-        client.post(
-            "/api/auth/general/password/login",
-            json={"email": email, "password": PASSWORD + "Changed"},
-        ).status_code
-        == 200
-    )
+    assert client.post("/api/auth/general/password/login", json={"email": email, "password": PASSWORD + "Changed"}).status_code == 403
+    authenticate_environment(email)
+    assert client.post("/api/auth/general/password/login", json={"email": email, "password": PASSWORD + "Changed"}).status_code == 200
 
 
 def test_attempts_expiry_wrong_purpose_and_no_password_echo(context):
@@ -267,3 +268,11 @@ def test_email_login_remains_available_and_otp_is_single_use(context):
     values = {"email": email, "otp_code": otp, "force_new_session": True}
     assert client.post("/api/auth/general/otp/verify", json=values).status_code == 200
     assert client.post("/api/auth/general/otp/verify", json=values).status_code == 401
+
+
+def authenticate_environment(email):
+    code = store.create_general_otp(email)
+    result = client.post("/api/auth/general/otp/verify", json={"email":email, "otp_code":code, "force_new_session":True})
+    assert result.status_code == 200, result.text
+    session = result.json()["data"]
+    store.revoke_general_session(session["access_token"], session["refresh_token"])

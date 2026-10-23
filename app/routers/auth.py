@@ -11,7 +11,10 @@ from app.services.authz import bearer_token, require_staff
 from app.services.responses import ok
 from app.services.store import SessionConflictError, store
 
+from app.routers.passkeys import router as passkey_router
+
 router = APIRouter(tags=["auth"])
+router.include_router(passkey_router)
 
 
 @router.get("/notifications")
@@ -97,9 +100,13 @@ class StaffOtpVerifyRequest(BaseModel):
 class GeneralOtpRequest(BaseModel):
     email: EmailStr
 
+    @field_validator("email")
+    @classmethod
+    def normalized_email(cls, value):
+        return value.lower()
 
-class GeneralOtpVerifyRequest(BaseModel):
-    email: EmailStr
+
+class GeneralOtpVerifyRequest(GeneralOtpRequest):
     otp_code: str = Field(default="",max_length=6)
     force_new_session: bool = False
 
@@ -257,6 +264,9 @@ def general_otp_verify(payload: GeneralOtpVerifyRequest, request: Request, respo
         )
         raise AppError(401, "invalid_credentials", "Invalid email or verification code.")
     account = session.get("account", {})
+    if not (settings.allow_empty_otp and payload.otp_code == ""):
+        from app.services.login_security import remember
+        remember(request, response, session)
     from app.services.shared_login import COOKIE, set_cookie
     set_cookie(response,session["refresh_token"],request.cookies.get(COOKIE))
     write_access_log(
@@ -278,13 +288,17 @@ def general_login_method(payload: GeneralLoginMethodRequest, request: Request):
 
 @router.post("/auth/general/password/login")
 def general_password_login(payload: GeneralPasswordLoginRequest, request: Request, response: Response):
-    from app.services import password_auth
+    from app.services import password_auth, login_security
     if is_presentation_email(str(payload.email)):
         raise AppError(401, "presentation_login_required", "프레젠테이션 전용 로그인으로 접속해 주세요.")
     try:
-        session = password_auth.login(str(payload.email), payload.password, payload.force_new_session, request.client.host)
+        session = password_auth.login(str(payload.email), payload.password, payload.force_new_session, request.client.host, request.cookies.get(login_security.cookie_name()))
     except SessionConflictError as exc:
         raise AppError(409,"session_conflict","이미 다른 브라우저 또는 기기에서 로그인 중입니다.",exc.details)
+    except AppError as exc:
+        if exc.code == "additional_verification_required":
+            write_access_log(request, event_type="login_verification_required", account_scope="general", email=str(payload.email), details={"method": "password"})
+        raise
     if not session:
         write_access_log(request,event_type="login_failed",account_scope="general",email=str(payload.email),details={"method":"password"})
         raise AppError(401,"invalid_credentials","이메일 또는 비밀번호가 올바르지 않습니다.")
