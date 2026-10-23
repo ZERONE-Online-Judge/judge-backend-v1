@@ -26,6 +26,10 @@ class ContestRow(Base):
     submission_access_after_end: Mapped[str] = mapped_column(String(32), default="private")
     board_access_after_end: Mapped[str] = mapped_column(String(32), default="participants")
     board_write_after_end: Mapped[bool] = mapped_column(Boolean, default=False)
+    board_question_visibility_policy: Mapped[str] = mapped_column(String(16), default="choice", server_default="choice")
+    board_question_default_visibility: Mapped[str] = mapped_column(String(16), default="public", server_default="public")
+    board_comment_scope_policy: Mapped[str] = mapped_column(String(16), default="choice", server_default="choice")
+    board_comment_default_scope: Mapped[str] = mapped_column(String(16), default="all", server_default="all")
     notice_access_after_end: Mapped[str] = mapped_column(String(32), default="public")
     editorial_access_after_end: Mapped[str] = mapped_column(String(32), default="private")
     scoreboard_freeze_mode: Mapped[str] = mapped_column(String(32), default="auto")
@@ -311,6 +315,7 @@ class ContestQuestionRow(Base):
     title: Mapped[str] = mapped_column(String(255))
     body: Mapped[str] = mapped_column(Text)
     visibility: Mapped[str] = mapped_column(String(32), default="public", index=True)
+    comment_scope: Mapped[str] = mapped_column(String(16), default="all", server_default="all")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 

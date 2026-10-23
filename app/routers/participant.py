@@ -1,6 +1,7 @@
 from app.judge_languages import LANGUAGES, require_allowed
 from app.services.request_sessions import request_database
 import asyncio
+from typing import Literal
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, EmailStr, Field
@@ -80,7 +81,8 @@ class SubmissionCreateRequest(BaseModel):
 class QuestionCreateRequest(BaseModel):
     title: str = Field(min_length=1, max_length=255)
     body: str = Field(min_length=1)
-    visibility: str = "public"
+    visibility: Literal["public", "private"] | None = None
+    comment_scope: Literal["all", "operators"] | None = None
 
 
 class QuestionAnswerCreateRequest(BaseModel):
@@ -658,17 +660,13 @@ def contest_board(contest_id: str, request: Request):
 def create_question(contest_id: str, payload: QuestionCreateRequest, request: Request):
     participant = require_participant(request, contest_id)
     if participant.get("is_preview"):
-        if payload.visibility not in {"public", "private"}:
-            raise AppError(422, "validation_error", "Unsupported question visibility.")
-        return ok(request, create_preview_question(participant, payload.title, payload.body, payload.visibility).model_dump(mode="json"))
+        return ok(request, create_preview_question(participant, payload.title, payload.body, payload.visibility, payload.comment_scope).model_dump(mode="json"))
     contest = store.get_public_contest(contest_id, allow_private=bool(participant))
     if not contest:
         raise not_found()
     if _is_ended(contest) and not _allow_board_write_after_end(contest, participant):
         raise not_found()
-    if payload.visibility not in {"public", "private"}:
-        raise AppError(422, "validation_error", "Unsupported question visibility.")
-    question = store.create_question(contest_id, participant, payload.title, payload.body, payload.visibility)
+    question = store.create_question(contest_id, participant, payload.title, payload.body, payload.visibility, payload.comment_scope)
     if contest:
         operator_accounts = [
             account
@@ -761,6 +759,7 @@ def create_question_answer(
         body,
         "public",
         str(participant["member"].email),
+        participant=participant,
     )
     if not answer:
         raise not_found()

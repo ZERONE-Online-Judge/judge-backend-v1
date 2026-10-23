@@ -1,7 +1,7 @@
 from pydantic import model_serializer
 from datetime import datetime, timedelta, timezone
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, EmailStr, Field
@@ -134,6 +134,10 @@ class Contest(BaseModel):
     submission_access_after_end: ContestResourceAccess = ContestResourceAccess.PRIVATE
     board_access_after_end: ContestResourceAccess = ContestResourceAccess.PARTICIPANTS
     board_write_after_end: bool = False
+    board_question_visibility_policy: Literal["choice", "public", "private"] = "choice"
+    board_question_default_visibility: Literal["public", "private"] = "public"
+    board_comment_scope_policy: Literal["choice", "all", "operators"] = "choice"
+    board_comment_default_scope: Literal["all", "operators"] = "all"
     notice_access_after_end: ContestResourceAccess = ContestResourceAccess.PUBLIC
     editorial_access_after_end: ContestResourceAccess = ContestResourceAccess.PRIVATE
     scoreboard_freeze_mode: ScoreboardFreezeMode = ScoreboardFreezeMode.AUTO
@@ -306,6 +310,8 @@ class ContestQuestion(BaseModel):
     title: str
     body: str
     visibility: str = "public"
+    comment_scope: Literal["all", "operators"] = "all"
+    effective_comment_scope: Literal["all", "operators"] = "all"
     created_at: datetime = Field(default_factory=now_utc)
     updated_at: datetime = Field(default_factory=now_utc)
     team_name: str | None = None

@@ -181,6 +181,10 @@ def _contest(row: ContestRow, *, release_locked: bool | None = None) -> Contest:
         submission_access_after_end=ContestResourceAccess(row.submission_access_after_end or "private"),
         board_access_after_end=ContestResourceAccess(row.board_access_after_end or "participants"),
         board_write_after_end=bool(row.board_write_after_end),
+        board_question_visibility_policy=row.board_question_visibility_policy,
+        board_question_default_visibility=row.board_question_default_visibility,
+        board_comment_scope_policy=row.board_comment_scope_policy,
+        board_comment_default_scope=row.board_comment_default_scope,
         notice_access_after_end=ContestResourceAccess(row.notice_access_after_end or "public"),
         editorial_access_after_end=ContestResourceAccess(row.editorial_access_after_end or "private"),
         scoreboard_freeze_mode=ScoreboardFreezeMode(row.scoreboard_freeze_mode or "auto"),
@@ -574,6 +578,7 @@ def _question(
         created_at=_aware(row.created_at),
         updated_at=_aware(row.updated_at),
         team_name=team.team_name if team else None,
+        comment_scope=row.comment_scope,
         division_name=division.name if division else None,
         author_name=member.name if member else None,
         author_email=member.email if member else None,
@@ -595,7 +600,7 @@ def _question_for_view(
     team = db.get(ParticipantTeamRow, row.participant_team_id)
     member = db.get(TeamMemberRow, row.team_member_id)
     division = db.get(ContestDivisionRow, team.division_id) if team else None
-    return _question(
+    result = _question(
         row,
         team=team,
         member=member,
@@ -603,6 +608,9 @@ def _question_for_view(
         answers=answers,
         answer_mapper=lambda answer: _answer_for_view(answer, db),
     )
+    from app.services.board_policy import effective_comment_scope
+    result.effective_comment_scope = effective_comment_scope(db.get(ContestRow, row.contest_id), row)
+    return result
 
 
 def _staff(row: StaffAccountRow) -> StaffAccount:
@@ -2991,10 +2999,13 @@ class DbStore:
                 )
             return visible_questions
 
-    def create_question(self, contest_id: str, participant: dict, title: str, body: str, visibility: str) -> ContestQuestion:
+    def create_question(self, contest_id: str, participant: dict, title: str, body: str, visibility: str | None = None, comment_scope: str | None = None) -> ContestQuestion:
         with self._session() as db:
-            if not db.get(ContestRow, contest_id):
+            contest = db.scalar(select(ContestRow).where(ContestRow.contest_id == contest_id).with_for_update())
+            if not contest:
                 raise ValueError("contest not found")
+            from app.services.board_policy import question_options
+            visibility, comment_scope = question_options(contest, visibility, comment_scope)
             row = ContestQuestionRow(
                 contest_id=contest_id,
                 participant_team_id=participant["team"].participant_team_id,
@@ -3002,6 +3013,7 @@ class DbStore:
                 title=title,
                 body=body,
                 visibility=visibility,
+                comment_scope=comment_scope,
             )
             db.add(row)
             db.commit()
@@ -3009,11 +3021,15 @@ class DbStore:
             return _question_for_view(row, db)
 
     def update_question(self, contest_id: str, question_id: str, **values) -> ContestQuestion | None:
-        allowed = {"visibility"}
+        allowed = {"visibility", "comment_scope"}
         with self._session() as db:
-            row = db.get(ContestQuestionRow, question_id)
-            if not row or row.contest_id != contest_id:
+            contest = db.scalar(select(ContestRow).where(ContestRow.contest_id == contest_id).with_for_update())
+            row = db.scalar(select(ContestQuestionRow).where(ContestQuestionRow.contest_question_id == question_id).with_for_update())
+            if not contest or not row or row.contest_id != contest_id:
                 return None
+            if values.get("comment_scope") is not None:
+                from app.services.board_policy import question_options
+                question_options(contest, comment_scope=values["comment_scope"])
             for key, value in values.items():
                 if key in allowed and value is not None:
                     setattr(row, key, value)
@@ -3031,11 +3047,17 @@ class DbStore:
             db.commit()
             return True
 
-    def create_answer(self, contest_id: str, question_id: str, body: str, visibility: str, created_by_email: str | None = None) -> ContestQuestionAnswer | None:
+    def create_answer(self, contest_id: str, question_id: str, body: str, visibility: str, created_by_email: str | None = None, *, participant: dict | None = None) -> ContestQuestionAnswer | None:
         with self._session() as db:
-            question = db.get(ContestQuestionRow, question_id)
-            if not question or question.contest_id != contest_id:
+            contest = db.scalar(select(ContestRow).where(ContestRow.contest_id == contest_id).with_for_update())
+            question = db.scalar(select(ContestQuestionRow).where(ContestQuestionRow.contest_question_id == question_id).with_for_update())
+            if not contest or not question or question.contest_id != contest_id:
                 return None
+            if participant is not None:
+                if question.visibility == "private" and question.participant_team_id != participant["team"].participant_team_id:
+                    return None
+                from app.services.board_policy import require_participant_comment
+                require_participant_comment(contest, question)
             row = ContestQuestionAnswerRow(
                 contest_id=contest_id,
                 contest_question_id=question_id,
@@ -3189,6 +3211,10 @@ class DbStore:
             "submission_access_after_end",
             "board_access_after_end",
             "board_write_after_end",
+            "board_question_visibility_policy",
+            "board_question_default_visibility",
+            "board_comment_scope_policy",
+            "board_comment_default_scope",
             "notice_access_after_end",
             "editorial_access_after_end",
             "scoreboard_freeze_mode",
@@ -3216,6 +3242,8 @@ class DbStore:
                     if isinstance(value, (ContestStatus, ContestVisibility, ContestResourceAccess, ScoreboardFreezeMode, ScoreboardReleaseMode)):
                         value = value.value
                     setattr(row, key, value)
+            from app.services.board_policy import normalize_settings
+            normalize_settings(row)
             normalize_private_resources(row)
             if row.problem_access_after_end == ContestResourceAccess.PRIVATE.value:
                 row.editorial_access_after_end = ContestResourceAccess.PRIVATE.value

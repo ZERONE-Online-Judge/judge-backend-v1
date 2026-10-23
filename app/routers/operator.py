@@ -139,6 +139,10 @@ class ContestSettingsUpdateRequest(BaseModel):
     submission_access_after_end: ContestResourceAccess | None = None
     board_access_after_end: ContestResourceAccess | None = None
     board_write_after_end: bool | None = None
+    board_question_visibility_policy: Literal["choice", "public", "private"] | None = None
+    board_question_default_visibility: Literal["public", "private"] | None = None
+    board_comment_scope_policy: Literal["choice", "all", "operators"] | None = None
+    board_comment_default_scope: Literal["all", "operators"] | None = None
     notice_access_after_end: ContestResourceAccess | None = None
     editorial_access_after_end: ContestResourceAccess | None = None
     scoreboard_freeze_mode: ScoreboardFreezeMode | None = None
@@ -176,6 +180,7 @@ class ContestAnswerUpdateRequest(BaseModel):
 
 class ContestQuestionUpdateRequest(BaseModel):
     visibility: str | None = None
+    comment_scope: Literal["all", "operators"] | None = None
 
 
 class OperatorTestSubmissionRequest(BaseModel):
