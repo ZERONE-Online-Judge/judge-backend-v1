@@ -202,3 +202,23 @@ def test_legacy_verification_labels_are_current_scoped_and_do_not_rewrite_histor
         persisted = json.loads(db.get(OperationalAuditLogRow, own.operational_audit_log_id).details)
     assert 'related_target' not in persisted
     assert '비공개 지문' not in str(details)
+
+
+def test_new_contests_hide_progress_and_keep_explicit_preferences(context):
+    c = context
+    path = c['prefix'] + '/settings'
+    assert c['contest'].participant_progress_visible is False
+    assert c['contest'].mock_judging_progress_visible is False
+    enabled = client.patch(path, headers=c['owner'], json={'participant_progress_visible': True})
+    assert enabled.status_code == 200
+    assert enabled.json()['data']['participant_progress_visible'] is True
+    updated = client.patch(path, headers=c['owner'], json={'title': 'Keep saved progress preference'})
+    assert updated.status_code == 200
+    assert updated.json()['data']['participant_progress_visible'] is True
+    other = store.create_contest('Another default contest', 'ZOJ', '')
+    assert other.participant_progress_visible is False
+    from app.database import engine
+    if engine.dialect.name == 'postgresql':
+        from sqlalchemy import inspect
+        column = next(col for col in inspect(engine).get_columns('contests') if col['name'] == 'participant_progress_visible')
+        assert 'false' in str(column['default']).lower()
