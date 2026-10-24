@@ -143,6 +143,7 @@ class ContestSettingsUpdateRequest(BaseModel):
     freeze_at: datetime | None = None
     problem_access_after_end: ContestResourceAccess | None = None
     scoreboard_public_during_contest: bool | None = None
+    hide_participation_counts_before_start: bool | None = None
     scoreboard_access_after_end: ContestResourceAccess | None = None
     submission_access_after_end: ContestResourceAccess | None = None
     board_access_after_end: ContestResourceAccess | None = None

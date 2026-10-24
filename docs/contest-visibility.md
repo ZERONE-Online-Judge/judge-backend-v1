@@ -28,3 +28,13 @@
 운영 기록, 저장 파일을 영구 삭제하지 않습니다. 삭제 이력은 운영 로그에
 남으며, 화면에서 복원하는 기능은 제공하지 않습니다. 내부 이력 조회가 필요한
 경우에만 ORM 쿼리에 `include_deleted_contests=True` 실행 옵션을 사용합니다.
+
+## Participation totals before the start
+
+`hide_participation_counts_before_start` defaults to `false`, including
+existing contests. When enabled, the public contest detail response omits
+both `participant_count` and `team_count` before `start_at`, regardless of
+whether the caller is anonymous or signed in. At the start instant the
+totals become available automatically. Internal operator dashboards and
+the participant's own team roster remain available. This setting does not
+change contest visibility or resource access.

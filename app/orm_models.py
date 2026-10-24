@@ -23,6 +23,7 @@ class ContestRow(Base):
     freeze_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     problem_access_after_end: Mapped[str] = mapped_column(String(32), default="private")
     scoreboard_public_during_contest: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    hide_participation_counts_before_start: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     scoreboard_access_after_end: Mapped[str] = mapped_column(String(32), default="private")
     submission_access_after_end: Mapped[str] = mapped_column(String(32), default="private")
     board_access_after_end: Mapped[str] = mapped_column(String(32), default="participants")
