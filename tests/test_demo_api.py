@@ -2951,6 +2951,7 @@ def test_service_master_can_view_judge_agent_logs():
 
 def test_submission_progress_is_updated_during_judging():
     contest_id, login = participant_login()
+    store.update_contest_settings(contest_id, participant_progress_visible=True)
     advanced_division = login["division"]
     advanced_problem = client.get(
         f"/api/contests/{contest_id}/divisions/{advanced_division['division_id']}/problems",

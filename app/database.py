@@ -304,7 +304,7 @@ def create_schema() -> None:
                 if "freeze_submission_count_visible" not in columns:
                     connection.execute(text("ALTER TABLE contests ADD COLUMN freeze_submission_count_visible BOOLEAN DEFAULT 0 NOT NULL"))
                 if "participant_progress_visible" not in columns:
-                    connection.execute(text("ALTER TABLE contests ADD COLUMN participant_progress_visible BOOLEAN DEFAULT 1 NOT NULL"))
+                    connection.execute(text("ALTER TABLE contests ADD COLUMN participant_progress_visible BOOLEAN DEFAULT 0 NOT NULL"))
                 if "mock_judging_progress_visible" not in columns:
                     connection.execute(text("ALTER TABLE contests ADD COLUMN mock_judging_progress_visible BOOLEAN DEFAULT 0 NOT NULL"))
         if "contest_questions" in inspector.get_table_names():

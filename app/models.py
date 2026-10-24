@@ -145,7 +145,7 @@ class Contest(BaseModel):
     scoreboard_release_locked: bool = False
     mock_judging_enabled: bool = False
     freeze_submission_count_visible: bool = False
-    participant_progress_visible: bool = True
+    participant_progress_visible: bool = False
     mock_judging_progress_visible: bool = False
     emergency_notice: str | None = None
     emergency_notice_template: str | None = None
