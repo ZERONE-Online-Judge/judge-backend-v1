@@ -7,7 +7,7 @@ from pydantic import BaseModel, EmailStr, Field
 from app.models import now_utc
 from app.settings import settings
 from app.services.authz import bearer_token
-from app.services.contest_visibility import contest_payload_for_view, visible_private_contest_ids
+from app.services.contest_visibility import contest_payload_for_view, visible_private_contest_ids, contest_has_ended
 from app.services.errors import not_found
 from app.services.mail_templates import absolute_url, format_korean_datetime, render_branded_email
 from app.services.responses import ok, page
@@ -97,7 +97,11 @@ def contest_detail(contest_id: str, request: Request, response: Response):
         {
             "contest": _contest_payload(contest, request),
             "divisions": [division.model_dump(mode="json") for division in store.contest_divisions(contest_id)],
-            **store.contest_participation_counts(contest_id),
+            **({} if (
+                contest.hide_participation_counts_before_start
+                and not contest_has_ended(contest)
+                and now_utc() < contest.start_at
+            ) else store.contest_participation_counts(contest_id)),
         },
     )
 

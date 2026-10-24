@@ -131,6 +131,7 @@ class Contest(BaseModel):
     freeze_at: datetime
     problem_access_after_end: ContestResourceAccess = ContestResourceAccess.PRIVATE
     scoreboard_public_during_contest: bool = False
+    hide_participation_counts_before_start: bool = False
     scoreboard_access_after_end: ContestResourceAccess = ContestResourceAccess.PRIVATE
     submission_access_after_end: ContestResourceAccess = ContestResourceAccess.PRIVATE
     board_access_after_end: ContestResourceAccess = ContestResourceAccess.PARTICIPANTS

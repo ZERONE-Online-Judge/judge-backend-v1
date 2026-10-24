@@ -269,6 +269,8 @@ def create_schema() -> None:
                         connection.execute(text(f"ALTER TABLE contests ADD COLUMN {visibility_column} VARCHAR(16) DEFAULT 'public' NOT NULL"))
                 if "problem_access_after_end" not in columns:
                     connection.execute(text("ALTER TABLE contests ADD COLUMN problem_access_after_end VARCHAR(32) DEFAULT 'private' NOT NULL"))
+                if "hide_participation_counts_before_start" not in columns:
+                    connection.execute(text("ALTER TABLE contests ADD COLUMN hide_participation_counts_before_start BOOLEAN DEFAULT 0 NOT NULL"))
                 if "scoreboard_public_during_contest" not in columns:
                     connection.execute(text("ALTER TABLE contests ADD COLUMN scoreboard_public_during_contest BOOLEAN DEFAULT 0 NOT NULL"))
                 if "scoreboard_access_after_end" not in columns:
