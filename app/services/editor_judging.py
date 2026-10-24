@@ -35,6 +35,8 @@ MAX_ARCHIVE = 512 * 1024**2
 MAX_CONTENT = 512 * 1024**2
 HASH = r"^[a-f0-9]{64}$"
 FULL_VERIFICATION = "editor-judge-full-v1"
+REFERENCE_OUTPUT = "editor-reference-output-v1"
+MAX_REFERENCE_OUTPUT_BYTES = 128 * 1024 * 1024
 MAX_CASE_OUTPUT_BYTES = 256 * 1024
 MAX_RUN_OUTPUT_BYTES = 16 * 1024 * 1024
 _maintenance_lock = threading.Lock()
@@ -63,7 +65,7 @@ class CaseResult(Strict):
     runtime_ms: int | None = Field(default=None, ge=0)
     memory_kb: int | None = Field(default=None, ge=0)
     judge_message: str = Field(default="", max_length=2048)
-    output_base64: str | None = Field(default=None, max_length=4 * ((MAX_CASE_OUTPUT_BYTES + 2) // 3))
+    output_base64: str | None = Field(default=None, max_length=4 * ((MAX_REFERENCE_OUTPUT_BYTES + 2) // 3))
     output_total_bytes: int | None = Field(default=None, ge=0)
     output_truncated: bool = False
 
@@ -90,6 +92,7 @@ class Snapshot(Strict):
     time_limit_ms: int = Field(ge=100, le=10000)
     memory_limit_mb: int = Field(ge=16, le=1024)
     collect_all_results: bool = False
+    reference_output: bool = False
     language_resource_limits: dict[str, ResourceLimit] = Field(default_factory=dict, max_length=7)
 
     @field_validator("language_resource_limits")
@@ -136,6 +139,8 @@ def capabilities():
             "backend": "zoj", "runtime_revision": "zoj-judge-" + revision,
             "languages": list(DEFAULT_LANGUAGES),
             "full_suite_protocol": FULL_VERIFICATION,
+            "reference_output_protocol": REFERENCE_OUTPUT,
+            "reference_output_online_nodes": sum(REFERENCE_OUTPUT in (n.execution_capabilities or []) and aware(n.last_heartbeat_at) >= now_utc() - timedelta(seconds=settings.judge_node_active_window_seconds) for n in nodes),
             "full_suite_online_nodes": sum(FULL_VERIFICATION in (n.execution_capabilities or []) and aware(n.last_heartbeat_at) >= now_utc() - timedelta(seconds=settings.judge_node_active_window_seconds) for n in nodes),
             "standard_io_only": True, "contest_submissions_first": True,
             "online_nodes": sum(aware(n.last_heartbeat_at) >= now_utc() - timedelta(seconds=settings.judge_node_active_window_seconds) for n in nodes),
@@ -191,7 +196,13 @@ def create(email, source, fingerprint):
         ]
     except (ValueError, KeyError, UnicodeError, zipfile.BadZipFile, RuntimeError, ValidationError) as error:
         raise AppError(422, "editor_judge_snapshot_invalid", "채점 자료 형식·파일 무결성을 확인하세요.") from error
-    revision = capabilities()["runtime_revision"]
+    caps = capabilities()
+    if snapshot.reference_output:
+        if not snapshot.collect_all_results or len(snapshot.testcases) != 1:
+            raise AppError(422, "editor_reference_scope", "정답 생성은 입력 한 개의 전체 출력을 수집하는 작업이어야 합니다.")
+        if not caps.get("reference_output_online_nodes"):
+            raise AppError(503, "editor_reference_unavailable", "정답 생성용 ZOJ 채점 에이전트가 준비되지 않았습니다.")
+    revision = caps["runtime_revision"]
     with SessionLocal() as db:
         # Reserve the quota and dataset references before storage I/O. GC uses
         # the same owner lock, but uploads must never keep that lock or a DB
@@ -211,7 +222,7 @@ def create(email, source, fingerprint):
         if not existing and db.scalar(select(func.count()).select_from(Run).where(Run.status.in_(ACTIVE))) >= 256:
             raise AppError(429, "editor_judge_busy", "채점 대기열이 가득 찼습니다. 잠시 후 다시 요청하세요.")
         dataset_key = hashlib.sha256(json.dumps([
-            snapshot.project_id, snapshot.context_hash, snapshot.time_limit_ms, snapshot.memory_limit_mb,
+            snapshot.project_id, snapshot.context_hash, snapshot.time_limit_ms, snapshot.memory_limit_mb, snapshot.reference_output,
             {key: value.model_dump(exclude_none=True) for key,value in snapshot.language_resource_limits.items()},
             [c.model_dump() for c in sorted(snapshot.testcases, key=lambda c: c.index)],
             [r.model_dump() for r in sorted(snapshot.resources, key=lambda r: r.name)],
@@ -233,6 +244,7 @@ def create(email, source, fingerprint):
                                "time_limit_ms": snapshot.time_limit_ms, "memory_limit_mb": snapshot.memory_limit_mb,
                                "language_resource_limits": {key: value.model_dump(exclude_none=True) for key,value in snapshot.language_resource_limits.items()},
                                "collect_all_results": snapshot.collect_all_results,
+                               "reference_output": snapshot.reference_output,
                                "bundle_key": bundle_key, "base_bundle_key": bundle_key, "excluded_orders": [],
                                "testcases": case_refs,
                                "dataset_storage_keys": list(written),
@@ -414,6 +426,8 @@ def claim_jobs(node_id, node_secret, max_count, session_factory=None):
             query = query.where(Run.payload["language"].as_string().not_in(NEW_LANGUAGES))
         if FULL_VERIFICATION not in (node.execution_capabilities or []):
             query = query.where(Run.payload["collect_all_results"].as_boolean().is_not(True))
+        if REFERENCE_OUTPUT not in (node.execution_capabilities or []):
+            query = query.where(Run.payload["reference_output"].as_boolean().is_not(True))
         rows = db.scalars(query.order_by(Run.created_at, Run.run_id).limit(min(max_count, settings.judge_claim_max_batch_size)).with_for_update(skip_locked=True)).all()
         jobs = []
         for row in rows:
@@ -425,6 +439,7 @@ def claim_jobs(node_id, node_secret, max_count, session_factory=None):
                 "judge_job_id": row.run_id, "lease_token": row.lease_token,
                 "submission": {"submission_id": row.run_id, "submission_kind": "editor_verification", "language": payload["language"], "source_code": payload["source_code"]},
                 "collect_all_results": bool(payload.get("collect_all_results")),
+                "reference_output": bool(payload.get("reference_output")),
                 "problem": agent_problem({"problem_id": row.project_id, "time_limit_ms": payload["time_limit_ms"], "memory_limit_mb": payload["memory_limit_mb"], "language_resource_limits": payload.get("language_resource_limits", {})}),
                 # The bundle is an optimization. Keep real per-object fallback
                 # references so a download failure cannot become a no-test AC.
@@ -442,6 +457,8 @@ def output_key(row, index, sha):
 
 
 def merge_case_results(row, values, terminal=None):
+    output_limit = MAX_REFERENCE_OUTPUT_BYTES if row.payload.get("reference_output") else MAX_CASE_OUTPUT_BYTES
+    run_output_limit = MAX_REFERENCE_OUTPUT_BYTES if row.payload.get("reference_output") else MAX_RUN_OUTPUT_BYTES
     expected = {case["display_order"] for case in row.payload["testcases"]}
     previous = {case["index"]: case for case in (row.result or {}).get("testcase_results", [])}
     merged = dict(previous)
@@ -462,7 +479,7 @@ def merge_case_results(row, values, terminal=None):
                 raise ValueError("lease mismatch: invalid output encoding") from error
             size = len(content)
             original_size = value["output_total_bytes"]
-            if size > MAX_CASE_OUTPUT_BYTES or original_size is None or original_size < size or value["output_truncated"] != (size < original_size):
+            if size > output_limit or original_size is None or original_size < size or value["output_truncated"] != (size < original_size):
                 raise ValueError("lease mismatch: invalid output size")
             sha = hashlib.sha256(content).hexdigest()
             value.update(output_size=size, output_sha256=sha)
@@ -472,7 +489,7 @@ def merge_case_results(row, values, terminal=None):
         if index in previous and previous[index] != value:
             raise ValueError("lease mismatch: testcase result changed")
         merged[index] = value
-    if sum(case.get("output_size", 0) for case in merged.values()) > MAX_RUN_OUTPUT_BYTES:
+    if sum(case.get("output_size", 0) for case in merged.values()) > run_output_limit:
         raise ValueError("lease mismatch: output budget exceeded")
     complete = set(merged) == expected
     if terminal is not None:
