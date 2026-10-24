@@ -203,8 +203,7 @@ def staff_refresh(payload: StaffRefreshRequest, request: Request):
     return ok(request, refreshed)
 
 
-@router.post("/auth/general/otp/request")
-def general_otp_request(payload: GeneralOtpRequest, request: Request):
+def _request_general_otp(payload: GeneralOtpRequest, request: Request, *, allow_new: bool = False):
     from app.services.auth_rate_limit import consume
     if not settings.allow_empty_otp:
         consume('otp-mail-ip',request.client.host,1000,3600)
@@ -219,13 +218,25 @@ def general_otp_request(payload: GeneralOtpRequest, request: Request):
             f"Please wait {retry_after} seconds before requesting another verification code.",
             {"retry_after_seconds": retry_after},
         )
-    sent = store.create_general_otp(str(payload.email))
+    sent = store.create_general_otp(str(payload.email), allow_new=True) if allow_new else store.create_general_otp(str(payload.email))
     if not sent:
         raise AppError(404, "not_found", "This email is not registered.")
     data = {"sent": True, "delivery": "email", "cooldown_seconds": settings.otp_request_cooldown_seconds}
     if settings.allow_empty_otp:
         data["demo_otp"] = sent
     return ok(request, data)
+
+
+@router.post("/auth/general/otp/request")
+def general_otp_request(payload: GeneralOtpRequest, request: Request):
+    return _request_general_otp(payload, request)
+
+
+@router.post("/auth/general/editor/otp/request")
+def editor_otp_request(payload: GeneralOtpRequest, request: Request):
+    # Editor already supports public email onboarding. Verification creates an
+    # identity only; contest participation and staff permissions stay separate.
+    return _request_general_otp(payload, request, allow_new=True)
 
 
 @router.post("/auth/general/otp/verify")

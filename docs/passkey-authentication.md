@@ -113,3 +113,17 @@ rolling back application code without dropping credentials. Do not downgrade
 References: [WebAuthn](https://www.w3.org/TR/webauthn-3/),
 [py_webauthn](https://duo-labs.github.io/py_webauthn/),
 [OWASP MFA](https://cheatsheetseries.owasp.org/cheatsheets/Multifactor_Authentication_Cheat_Sheet.html).
+
+## Editor integration
+
+Editor sends login and passkey/password management to the canonical ZOJ
+screen, then returns to an allowlisted Editor project URL. Credentials are
+never placed in the return URL. All WebAuthn ceremonies keep the same RP
+and origin, and reuse enrollment, trusted-environment checks and session
+transfer proofs.
+
+`/auth/general/editor/otp/request` preserves Editor's public email
+onboarding. It shares the normal OTP limits and cooldown; a new identity
+is created only after a valid unused OTP is verified. New Editor accounts
+have no contest participation or staff permissions. The normal ZOJ OTP
+request endpoint continues to require an existing identity.
