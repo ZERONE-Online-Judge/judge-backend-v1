@@ -186,7 +186,7 @@ def test_one_token_cannot_take_all_capacity_and_cancellation_releases_it(monkeyp
 
 def test_etag_never_bypasses_access_policy(board, cache):
     cid, did, _, _ = board
-    store.update_contest_settings(cid, scoreboard_access_after_end="public")
+    store.update_contest_settings(cid, scoreboard_access_after_end="public", scoreboard_public_during_contest=True)
     client = TestClient(app)
     path = f"/api/contests/{cid}/divisions/{did}/scoreboard"
     first = client.get(path)

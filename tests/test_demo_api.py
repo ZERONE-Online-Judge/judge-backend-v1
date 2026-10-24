@@ -1710,6 +1710,7 @@ def test_public_contest_resources_can_be_viewed_without_participant_during_conte
         headers=headers,
         json={
             "problem_access_after_end": "public",
+            "scoreboard_public_during_contest": True,
             "scoreboard_access_after_end": "public",
             "submission_access_after_end": "public",
             "board_access_after_end": "public",
@@ -1730,6 +1731,7 @@ def test_public_contest_resources_can_be_viewed_without_participant_during_conte
             headers=headers,
             json={
                 "problem_access_after_end": "private",
+                "scoreboard_public_during_contest": False,
                 "scoreboard_access_after_end": "private",
                 "submission_access_after_end": "private",
                 "board_access_after_end": "participants",

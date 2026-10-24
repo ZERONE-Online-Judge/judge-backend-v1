@@ -32,7 +32,7 @@ def race():
     start = now - timedelta(hours=3)
     contest = store.create_contest("Scoreboard release modes", "Test", "", start_at=start,
         freeze_at=start + timedelta(hours=1), end_at=start + timedelta(hours=2), status=ContestStatus.ENDED)
-    store.update_contest_settings(contest.contest_id, scoreboard_access_after_end="public", freeze_submission_count_visible=True)
+    store.update_contest_settings(contest.contest_id, scoreboard_access_after_end="public", scoreboard_public_during_contest=True, freeze_submission_count_visible=True)
     divisions = [store.create_contest_division(contest.contest_id, code, code) for code in ("A", "B")]
     teams, submissions = {}, {}
     for division in divisions:
