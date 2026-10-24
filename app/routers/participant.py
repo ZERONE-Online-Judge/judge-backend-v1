@@ -189,7 +189,7 @@ def _allow_scoreboard_view(request: Request, contest_id: str, division_id: str |
         raise not_found()
     if participant and division_id and participant["division"].division_id != division_id:
         raise not_found("Division is not available for this participant.")
-    if _allow_started_resource(contest, contest.scoreboard_access_after_end, participant):
+    if _has_started(contest) and (participant is not None or contest.scoreboard_public_during_contest):
         return participant, contest
     raise not_found()
 

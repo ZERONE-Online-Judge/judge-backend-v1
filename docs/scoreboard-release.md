@@ -31,3 +31,14 @@ SSE signals use only committed revisions and the count-policy field; clients
 refetch the authorized public projection.
 
 Migration 0057 adds the boolean with a false default for existing contests.
+
+## Anonymous access during a contest
+
+`scoreboard_public_during_contest` defaults to false and independently
+controls anonymous scoreboard access while a public contest is running.
+It does not open a private contest or expose results before the start.
+After the contest ends, `scoreboard_access_after_end` alone controls access.
+Both the default-division and explicit-division endpoints, including their
+wait variants, authorize every request before serving a cached response.
+Anonymous views use the same public freeze and release projection as the
+participant scoreboard; operator internal results remain separate.
