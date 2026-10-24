@@ -545,3 +545,72 @@ def test_signed_snapshot_accepts_40_mib_testcase_and_preserves_input(database):
         assert object_storage.read_bytes(key) == content
     assert judging.MAX_ARCHIVE == 512 * 1024**2
     assert judging.MAX_CONTENT == 512 * 1024**2
+
+
+def reference_node(database):
+    with database() as db:
+        identity = db.scalar(select(JudgeNodeRow.judge_node_id).where(JudgeNodeRow.node_name == 'editor-test-node'))
+    if identity is None:
+        identity = node()
+    with database() as db:
+        row = db.get(JudgeNodeRow, identity)
+        row.execution_capabilities = [judging.FULL_VERIFICATION, judging.REFERENCE_OUTPUT, 'judge-zoj-runtime-v1']
+        db.commit()
+    return identity
+
+
+def reference_snapshot(**changes):
+    def change(manifest, files):
+        manifest.update(collect_all_results=True, reference_output=True)
+        manifest['testcases'] = manifest['testcases'][:1]
+        manifest.update(changes)
+        used = {manifest['source']['sha256'], *(r['sha256'] for r in manifest['resources'])}
+        used.update(sha for case in manifest['testcases'] for sha in (case['input_sha'], case['answer_sha']))
+        for name in list(files):
+            if name.removeprefix('blobs/') not in used:
+                del files[name]
+    return snapshot(change=change)
+
+
+def test_reference_admission_requires_capable_node_and_exactly_one_input(database):
+    result = submit(reference_snapshot())
+    assert result.status_code == 503 and result.json()['error']['code'] == 'editor_reference_unavailable'
+    reference_node(database)
+    for changes in [dict(collect_all_results=False), dict(testcases=[])]:
+        assert submit(reference_snapshot(**changes)).status_code == 422
+    assert submit(snapshot(change=lambda m, f: m.update(reference_output=True, collect_all_results=True))).status_code == 422
+
+
+def test_reference_claim_uses_native_language_policy_and_only_new_nodes(database):
+    identity = reference_node(database)
+    result = submit(reference_snapshot(language_resource_limits={'python313': {'time_limit_ms': 4321, 'memory_limit_mb': 765}}))
+    assert result.status_code == 202, result.text
+    with database() as db:
+        row = db.get(JudgeNodeRow, identity)
+        row.execution_capabilities = [judging.FULL_VERIFICATION, 'judge-zoj-runtime-v1']
+        db.commit()
+    assert claim(identity) == []
+    reference_node(database)
+    request = claim(identity)[0]
+    assert request['reference_output'] and request['collect_all_results']
+    assert request['problem']['language_resource_limits']['python313'] == {'time_limit_ms': 4321, 'memory_limit_mb': 765}
+    assert request['problem']['time_limit_ms'] == 1000
+
+
+def test_reference_keeps_full_output_without_expanding_verification_capture(database):
+    identity = reference_node(database)
+    response = submit(reference_snapshot())
+    parent = response.json()['data']['id']
+    request = claim(identity)[0]
+    output = bytes([0,255,13,10]) * 100_000
+    evidence = case_result(2, output=output)
+    final = report(parent, request['lease_token'], testcase_results=[evidence])
+    assert final.status_code == 200, final.text
+    path = f'/api/editor/judge/runs/{parent}/testcases/2/output'
+    saved = client.get(path, headers=headers('GET', path)).json()['data']
+    assert base64.b64decode(saved['base64']) == output and not saved['truncated']
+    assert client.get(path, headers=headers('GET', path, email='other@example.com')).status_code == 404
+    ordinary = submit(snapshot(change=lambda manifest, files: manifest.update(collect_all_results=True))).json()['data']['id']
+    ordinary_request = claim(identity)[0]
+    oversized = report(ordinary, ordinary_request['lease_token'], testcase_results=[evidence, case_result(7)])
+    assert oversized.status_code == 409
