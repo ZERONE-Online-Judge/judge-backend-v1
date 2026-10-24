@@ -32,9 +32,10 @@ location ^~ /api/internal/judge/ {
     allow 10.10.10.116;
     allow 10.10.10.117;
     deny all;
-    # Full Editor reports contain up to 16 MiB of captured stdout, encoded
-    # as base64, plus at most 1,000 bounded testcase result records.
-    client_max_body_size 32m;
+    # Single-input reference reports retain up to 128 MiB of stdout.
+    # Allow its base64 encoding and metadata; application validation keeps
+    # ordinary verification reports at the existing 16 MiB aggregate budget.
+    client_max_body_size 192m;
     proxy_read_timeout 150s;
     proxy_pass http://api_backend;
     proxy_http_version 1.1;
