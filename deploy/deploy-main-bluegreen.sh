@@ -3,6 +3,10 @@ set -eu
 
 DEPLOY_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 BACKEND_DIR=$(CDPATH= cd -- "$DEPLOY_DIR/.." && pwd)
+if [ "${ZOJ_DEPLOY_LOCK_HELD:-0}" != "1" ]; then
+  exec flock --wait 2400 "$BACKEND_DIR/../service-backup-deploy.lock" \
+    env ZOJ_DEPLOY_LOCK_HELD=1 "$0" "$@"
+fi
 BLUEGREEN="$DEPLOY_DIR/bluegreen.sh"
 COMPOSE_FILE="$DEPLOY_DIR/compose.backend.yaml"
 

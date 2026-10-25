@@ -68,6 +68,14 @@ jobs:
       - name: Run tests
         run: python -m pytest tests
 
+      - name: Verify encrypted service backups
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends restic
+          python -m unittest discover -s tests -p test_service_backups.py
+          python -m py_compile deploy/backup/*.py
+          bash -n deploy/backup/install.sh deploy/backup/setup.sh
+
   editor-judge-test:
     name: Editor Judge PostgreSQL
     runs-on: ubuntu-latest
@@ -146,6 +154,9 @@ jobs:
           RELEASE_VERSION: ${{ github.sha }}
         run: |
           cd ~/zerone-online-judge/backend-v1
+          exec 9>../service-backup-deploy.lock
+          flock --wait 2400 9
+          export ZOJ_DEPLOY_LOCK_HELD=1
           git fetch origin main
           git checkout main
           git pull origin main

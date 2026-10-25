@@ -86,9 +86,12 @@ Services:
 - `mail-worker`: SMTP or Resend mail queue consumer
 - `verification-ai-worker`: shared GPT analysis of verification verdict mismatches; configure `OPENAI_API_KEY` in `deploy/env/backend.env`. See [configuration, cache and troubleshooting](../docs/verification-ai.md).
 - `notice-worker`: scheduled emergency notice publisher
-- `postgres-backup`: optional profile, daily `pg_dump -Fc`
+- `postgres-backup`: legacy optional profile, daily database-only `pg_dump -Fc`
 
-Enable backup profile:
+For production, use the [full ZOJ service backup](../docs/service-backups.md).
+It captures PostgreSQL, MinIO, Redis, the frontend, runtime images and host
+configuration together on the dedicated disk, with isolated restore drills.
+The legacy profile below covers only the database and is not a replacement:
 
 ```bash
 docker compose -f backend_v1/deploy/compose.backend.yaml --profile backup up -d postgres-backup
