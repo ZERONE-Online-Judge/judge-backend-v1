@@ -1,0 +1,10 @@
+[Unit]
+Description=Restore ZOJ database, objects and Redis in isolation
+
+[Timer]
+OnCalendar=*-*-* 03:40:00 Asia/Seoul
+Persistent=true
+Unit=zoj-backup-drill.service
+
+[Install]
+WantedBy=timers.target

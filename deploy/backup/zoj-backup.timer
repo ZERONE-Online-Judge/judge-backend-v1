@@ -1,0 +1,12 @@
+[Unit]
+Description=Back up all ZOJ services from one atomic snapshot
+
+[Timer]
+OnBootSec=5min
+OnCalendar=*-*-* *:00/15:00
+RandomizedDelaySec=30
+Persistent=true
+Unit=zoj-backup.service
+
+[Install]
+WantedBy=timers.target

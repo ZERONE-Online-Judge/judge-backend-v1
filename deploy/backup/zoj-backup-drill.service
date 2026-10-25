@@ -1,0 +1,14 @@
+[Unit]
+Description=Restore ZOJ database, objects and Redis in isolation
+After=docker.service local-fs.target
+RequiresMountsFor=/srv/zoj-backup
+
+[Service]
+Type=oneshot
+UMask=0077
+ExecStart=/usr/local/sbin/zoj-backup drill
+ExecStopPost=/usr/local/sbin/zoj-backup cleanup
+TimeoutStartSec=5400
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=yes

@@ -1,0 +1,14 @@
+[Unit]
+Description=Back up all ZOJ services from one atomic snapshot
+After=docker.service local-fs.target
+RequiresMountsFor=/srv/zoj-backup
+
+[Service]
+Type=oneshot
+UMask=0077
+ExecStart=/usr/local/sbin/zoj-backup backup
+TimeoutStartSec=2400
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=yes
+ExecStopPost=/usr/local/sbin/zoj-backup cleanup

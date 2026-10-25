@@ -1,0 +1,13 @@
+[Unit]
+Description=Check and retain ZOJ encrypted backups
+After=docker.service local-fs.target
+RequiresMountsFor=/srv/zoj-backup
+
+[Service]
+Type=oneshot
+UMask=0077
+ExecStart=/usr/local/sbin/zoj-backup maintain
+TimeoutStartSec=5400
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=yes

@@ -1,0 +1,10 @@
+[Unit]
+Description=Check and retain ZOJ encrypted backups
+
+[Timer]
+OnCalendar=*-*-* 04:40:00 Asia/Seoul
+Persistent=true
+Unit=zoj-backup-maintain.service
+
+[Install]
+WantedBy=timers.target
