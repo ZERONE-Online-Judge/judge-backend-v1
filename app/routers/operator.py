@@ -1326,46 +1326,43 @@ async def judge_history(contest_id: str, request: Request, limit: int = 100, cur
     )
 
 
-@router.get("/operator/contests/{contest_id}/scoreboard/internal")
-def internal_scoreboard(contest_id: str, request: Request):
-    require_contest_staff(request, contest_id, "contest.scoreboard.view")
-    board = store.scoreboard_rows(contest_id, public_view=False)
-    public_board = store.scoreboard_rows(contest_id, public_view=True)
+def _operator_scoreboard_payload(contest_id: str, request: Request, division_id: str | None = None):
+    account = require_contest_staff(request, contest_id, "contest.view", "contest.scoreboard.view")
+    live_view = has_contest_permission(account, contest_id, "contest.scoreboard.view")
+    contest = store.get_contest(contest_id)
+    if not contest:
+        raise not_found()
+    if not live_view and contest.status not in {
+        ContestStatus.RUNNING, ContestStatus.ENDED, ContestStatus.FINALIZED, ContestStatus.ARCHIVED,
+    }:
+        raise permission_denied("대회 시작 후 참가자와 같은 스코어보드를 볼 수 있습니다.")
+    division = store.get_division(contest_id, division_id) if division_id else None
+    if division_id and not division:
+        raise not_found()
+    public_board = store.scoreboard_rows(contest_id, division_id, public_view=True)
+    # Never calculate or return the real standings for a basic staff viewer.
+    board = store.scoreboard_rows(contest_id, division_id, public_view=False) if live_view else public_board
     if not board:
         raise not_found()
     rows = [{**row, "visible_to_team": False} for row in board["rows"]]
-    return ok(
-        request,
-        {
-            "frozen_public_view": bool(public_board and public_board["frozen"]),
-            "operator_live_view": True,
-            "problem_stats": board.get("problem_stats", []),
-            "rows": rows,
-        },
-    )
+    return {
+        **({"division": division.model_dump(mode="json")} if division else {}),
+        "frozen_public_view": bool(public_board and public_board["frozen"]),
+        "operator_live_view": live_view,
+        "problem_stats": board.get("problem_stats", []),
+        "release": board.get("release") if not live_view else None,
+        "rows": rows,
+    }
+
+
+@router.get("/operator/contests/{contest_id}/scoreboard/internal")
+def internal_scoreboard(contest_id: str, request: Request):
+    return ok(request, _operator_scoreboard_payload(contest_id, request))
 
 
 @router.get("/operator/contests/{contest_id}/divisions/{division_id}/scoreboard/internal")
 def division_internal_scoreboard(contest_id: str, division_id: str, request: Request):
-    require_contest_staff(request, contest_id, "contest.scoreboard.view")
-    division = store.get_division(contest_id, division_id)
-    if not division:
-        raise not_found()
-    board = store.scoreboard_rows(contest_id, division_id, public_view=False)
-    public_board = store.scoreboard_rows(contest_id, division_id, public_view=True)
-    if not board:
-        raise not_found()
-    rows = [{**row, "visible_to_team": False} for row in board["rows"]]
-    return ok(
-        request,
-        {
-            "division": division.model_dump(mode="json"),
-            "frozen_public_view": bool(public_board and public_board["frozen"]),
-            "operator_live_view": True,
-            "problem_stats": board.get("problem_stats", []),
-            "rows": rows,
-        },
-    )
+    return ok(request, _operator_scoreboard_payload(contest_id, request, division_id))
 
 
 class ScoreboardReleaseRequest(BaseModel):
