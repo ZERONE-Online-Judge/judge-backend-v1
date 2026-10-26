@@ -1,4 +1,4 @@
-"""Strong authentication freshness and bounded, browser-and-IP login trust."""
+"""Strong authentication freshness and persistent, browser-bound IP lists."""
 
 import hashlib
 import hmac
@@ -6,7 +6,7 @@ import ipaddress
 import secrets
 import time
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from app.database import SessionLocal
 from app.models import now_utc
 from app.orm_models import (
@@ -19,7 +19,7 @@ from app.services.errors import AppError
 from app.services.security import token_hash
 from app.settings import settings
 
-TRUST_SECONDS = 30 * 24 * 3600
+TRUST_SECONDS = 365 * 24 * 3600
 FRESH_SECONDS = 300
 
 
@@ -63,6 +63,7 @@ def remember(request, response, login_session):
         db.execute(
             delete(TrustedEnvironmentRow).where(TrustedEnvironmentRow.expires_at <= at)
         )
+        _extend_browser_environments(db, email, token, at)
         row = db.get(TrustedEnvironmentRow, (email.lower(), token_hash(token), key))
         if row:
             row.expires_at = at + TRUST_SECONDS
@@ -76,6 +77,42 @@ def remember(request, response, login_session):
                 )
             )
         db.commit()
+    _set_cookie(response, token)
+
+
+def refresh_trust(request, response, login_session):
+    """Keep known IPs together without granting trust to an unverified IP.
+
+    A password login may extend an existing browser/IP proof, but cannot create
+    one or grant fresh authority for password/passkey management. Session
+    transfers and logout remain independent of these browser-bound records.
+    """
+    token = request.cookies.get(cookie_name())
+    at = int(time.time())
+    with SessionLocal() as db:
+        session, _ = session_context(db, login_session["access_token"])
+        if not is_trusted(db, session.email, token, request.client.host):
+            return
+        _extend_browser_environments(db, session.email, token, at)
+        db.commit()
+    _set_cookie(response, token)
+
+
+def _extend_browser_environments(db, email, token, at):
+    # Every still-valid IP for this account/browser shares the cookie deadline.
+    # Never restore expired rows or alter another account/browser's IP list.
+    db.execute(
+        update(TrustedEnvironmentRow)
+        .where(
+            TrustedEnvironmentRow.email == email.lower(),
+            TrustedEnvironmentRow.device_hash == token_hash(token),
+            TrustedEnvironmentRow.expires_at > at,
+        )
+        .values(expires_at=at + TRUST_SECONDS)
+    )
+
+
+def _set_cookie(response, token):
     response.set_cookie(
         cookie_name(),
         token,

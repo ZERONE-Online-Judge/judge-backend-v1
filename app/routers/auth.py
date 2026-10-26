@@ -313,6 +313,7 @@ def general_password_login(payload: GeneralPasswordLoginRequest, request: Reques
     if not session:
         write_access_log(request,event_type="login_failed",account_scope="general",email=str(payload.email),details={"method":"password"})
         raise AppError(401,"invalid_credentials","이메일 또는 비밀번호가 올바르지 않습니다.")
+    login_security.refresh_trust(request, response, session)
     account = session.get("account",{})
     from app.services.shared_login import COOKIE, set_cookie
     set_cookie(response,session["refresh_token"],request.cookies.get(COOKIE))
