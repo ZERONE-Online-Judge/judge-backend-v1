@@ -10,10 +10,10 @@ keys and biometric data never enter the application.
 - After successful email OTP login, accounts without passkeys are offered
   enrollment. Skipping or cancelling leaves the authenticated session usable.
 - The login page first asks only for an email. The next step prefers a
-  registered passkey on supported browsers, otherwise a registered password,
-  otherwise an email code. Other available methods stay on the same card.
-- Password login from an unfamiliar browser/IP automatically requests an email
-  code. A registered passkey can complete verification instead. Switching to
+  registered password, otherwise an email code. Supported passkeys and email
+  verification remain available as alternative methods.
+- Password login from an unfamiliar browser/IP asks the user to choose email
+  verification or a registered passkey. Switching to
   another email resets the selected methods and verification state.
 - My account → Passkey management lists credentials and their last use,
   supports adding up to ten credentials, and confirms deletion.
@@ -45,9 +45,14 @@ The schema is unchanged. Deploy these additive APIs before the frontend.
 
 A correct password alone can issue a session only when a previous email or
 passkey login verified both this browser's HttpOnly cookie and its current IP.
-Trust lasts 30 days from the last strong login, without renewal by password
-login or token refresh. Missing cookies, changed IPs, expired trust and all
-predeployment environments require email OTP or a passkey before login.
+Each account/browser retains a list of verified IPs independently of its
+active session. Email/passkey login and successful trusted password login
+renew the cookie and every still-valid IP in that browser's list together
+for one year. Returning to a previously verified IP requires only the
+password, even after another IP/browser logs in or the user logs out.
+Missing cookies, unfamiliar IPs and expired trust require email OTP or a
+passkey before login. Renewal does not recreate expired records or affect
+another account/browser's list. Token refresh alone does not renew trust.
 There is no session, SSO cookie or operator access issued by a password
 attempt that requires this additional verification.
 
@@ -56,6 +61,8 @@ Path=/ and no Domain. The DB contains only its SHA-256 digest and an HMAC of
 the normalized IP. Trust is scoped per email, browser token and IP. Password
 registration/reset and passkey deletion revoke remembered environments.
 Password changes also revoke existing sessions and pending security challenges.
+Remembered-environment renewal never grants fresh authority to manage
+passwords or passkeys; the separate five-minute strong verification remains.
 
 Only ASGI `request.client.host` is used for trust and limits; authentication
 never parses untrusted forwarding headers itself. Production Uvicorn must
@@ -105,6 +112,11 @@ OTP enrollment/skip, passkey cancellation, additional verification and
 management email verification/deletion confirmation. Migration tests cover
 upgrade and downgrade. Physical authenticator dialogs require the user's own
 interaction; automated tests do not register credentials for production users.
+
+`tests/test_login_environments.py` also runs against PostgreSQL. It covers
+returning between verified IPs, independent browsers, logout and session
+transfers, list-wide renewal, account/browser isolation, failed logins,
+expired/missing proofs and revocation after credential changes.
 
 Deploy backend migration 0054 before the frontend. The additive tables allow
 rolling back application code without dropping credentials. Do not downgrade
