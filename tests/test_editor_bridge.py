@@ -101,3 +101,16 @@ def test_verified_editor_resource_aliases_import_once(context):
         assert len({a.storage_key for a in assets}) == 2
         assert len({a.sha256 for a in assets}) == 1
         assert db.scalar(select(func.count()).select_from(EditorImportRow).where(EditorImportRow.problem_id == pid)) == 1
+
+
+def test_transfer_target_list_uses_signed_identity_and_current_contest_role(context):
+    c=context; path=f'/api/editor/contests/{c["cid"]}/problems'; email=email_for(c)
+    result=client.get(path,headers=headers('GET',path,email))
+    assert result.status_code==200,result.text
+    with SessionLocal() as db:
+        division_id=db.get(ProblemRow,c['pid']).division_id
+    assert result.json()['data']['problems']==[{'id':c['pid'],'title':'한글 파일 복원','code':'A','division_id':division_id}]
+    assert client.get(path).status_code==401
+    assert client.get(path,headers=headers('GET',path,email_for(c,True))).status_code==403
+    other=f'/api/editor/contests/{uuid4()}/problems'
+    assert client.get(other,headers=headers('GET',other,email)).status_code in {403,404}

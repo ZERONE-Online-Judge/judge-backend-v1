@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Query, Request
 from sqlalchemy import select
 from app.database import SessionLocal
-from app.orm_models import ContestDivisionRow, ContestRow
+from app.orm_models import ContestDivisionRow, ContestRow, ProblemRow
 from app.services.authz import has_contest_permission
 from app.services.editor_bridge import identity, staff
 from app.services.errors import AppError
@@ -34,6 +34,19 @@ def eligible_contests(request: Request):
             divisions = [{"id": d.division_id, "name": d.name, "code": d.code} for d in db.scalars(select(ContestDivisionRow).where(ContestDivisionRow.contest_id == row.contest_id).order_by(ContestDivisionRow.display_order))]
             contests.append({"id": row.contest_id, "title": row.title, "status": row.status, "locked": locked, "divisions": divisions})
         return ok(request, {"email": email, "contests": contests})
+
+
+@router.get("/contests/{contest_id}/problems")
+def contest_problems(contest_id: str, request: Request):
+    email, content_hash = identity(request)
+    if content_hash != hashlib.sha256(b"").hexdigest():
+        raise AppError(401, "editor_content_mismatch", "요청 내용이 인증 정보와 다릅니다.")
+    with SessionLocal() as db:
+        staff(db, email, contest_id)
+        rows = db.scalars(select(ProblemRow).where(ProblemRow.contest_id == contest_id)
+                          .order_by(ProblemRow.display_order, ProblemRow.problem_code)).all()
+        return ok(request, {"problems": [{"id": row.problem_id, "title": row.title,
+            "code": row.problem_code, "division_id": row.division_id} for row in rows]})
 
 
 @router.post("/contests/{contest_id}/imports")
