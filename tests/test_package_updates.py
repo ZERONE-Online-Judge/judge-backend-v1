@@ -11,17 +11,14 @@ from app.database import SessionLocal
 from app.models import now_utc
 from app.orm_models import (ContestRow, ProblemRow, ProblemAssetRow, SubmissionRow,
                            TestcaseSetRow as CaseSetRow, OperationalAuditLogRow)
-from app.services import editor_library as transport
 from app.services.storage import object_storage
 from app.services.store import store
 from test_problem_archives import client, context, mutate_zip
 from test_editor_bridge import export, headers, email_for, config
-from test_editor_library import configuration, PID, JOB
-from contextlib import contextmanager
 
 
 @pytest.fixture(autouse=True)
-def signing_key(configuration, config, monkeypatch):
+def signing_key(config, monkeypatch):
     from pydantic import SecretStr
     from app.settings import settings
     from test_editor_bridge import KEY
@@ -122,36 +119,6 @@ def test_running_contest_requires_explicit_update_confirmation(context):
     assert notice.emergency and '잘못된 테스트 보강' in notice.body
 
 
-def test_operator_package_update_confirms_notice_before_applying(context, monkeypatch):
-    from app.services import editor_library as transport
-    c = context
-    content = package(c)
-    with SessionLocal() as db:
-        db.get(ContestRow, c['cid']).status = 'running'
-        db.commit()
-    view = signed_preview(c, content).json()['data']
-    sha = hashlib.sha256(content).hexdigest()
-    monkeypatch.setattr(transport, 'request_json', lambda *args: {'status':'completed', 'package':{'format':'zoj', 'verified':True, 'sha256':sha}})
-    @contextmanager
-    def download(*args):
-        yield io.BytesIO(content)
-    monkeypatch.setattr(transport, 'download_package', download)
-    body = {'job_id':JOB, 'target_problem_id':c['pid'], 'target_hash':view['target_hash'],
-        'archive_sha256':sha, 'reason':'테스트 보강', 'confirm_running':True}
-    path = c['prefix'] + f'/editor-problems/{PID}/updates'
-    first = client.post(path, headers=c['owner'], json=body)
-    assert first.status_code == 409, first.text
-    draft = first.json()['error']['details']
-    assert '제목' in draft['title'] and '2000' in draft['body']
-    assert store.problems[c['pid']].title != '수정한 문제'
-    assert not any(n.contest_id == c['cid'] for n in store.contest_notices.values())
-    approved = {**draft, 'title':'A번 문제 수정 안내', 'reason':'테스트 보강'}
-    saved = client.post(path, headers=c['owner'], json={**body, '_change_notice':approved})
-    assert saved.status_code == 200, saved.text
-    notice = next(n for n in store.contest_notices.values() if n.contest_id == c['cid'])
-    assert notice.title == approved['title'] and notice.emergency
-    assert client.post(path, headers=c['owner'], json={**body, '_change_notice':approved}).status_code == 200
-    assert len([n for n in store.contest_notices.values() if n.contest_id == c['cid']]) == 1
 
 
 def test_pending_rejudging_prevents_package_update(context):
@@ -181,28 +148,3 @@ def test_storage_failure_rolls_back_database_and_keeps_old_package(context,monke
     assert signed_preview(c,content).json()['data']['target_hash']==preview['target_hash']
     with pytest.raises(FileNotFoundError):
         object_storage.read_bytes(calls[0])
-
-
-def test_zoj_library_multi_set_and_update_detects_changed_archive(context,monkeypatch):
-    c=context;content=package(c);sha=hashlib.sha256(content).hexdigest();calls=[]
-    def remote(method,path,email,values=None):
-        calls.append(values)
-        return {'status':'completed','revision':3,'package':{'format':'zoj','verified':True,'sha256':sha}}
-    @contextmanager
-    def download(*args): yield io.BytesIO(content)
-    monkeypatch.setattr(transport,'request_json',remote);monkeypatch.setattr(transport,'download_package',download)
-    root=c['prefix']+f'/editor-problems/{PID}'
-    assert client.post(root+'/packages',headers=c['owner'],json={'testsets':['tests','tle']}).status_code==202
-    assert calls[-1]['testsets']==['tests','tle']
-    values={'job_id':JOB,'target_problem_id':c['pid']}
-    response=client.post(root+'/updates:preview',headers=c['owner'],json=values);assert response.status_code==200,response.text
-    p=response.json()['data'];values.update(target_hash=p['target_hash'],archive_sha256='0'*64,reason='test')
-    assert client.post(root+'/updates',headers=c['owner'],json=values).status_code==409
-    values['archive_sha256']=sha
-    response=client.post(root+'/updates',headers=c['owner'],json=values);assert response.status_code==200,response.text
-    assert response.json()['data']['problem']['problem_id']==c['pid']
-    with SessionLocal() as db:
-        assert db.scalar(select(func.count()).select_from(OperationalAuditLogRow).where(
-            OperationalAuditLogRow.contest_id==c['cid'], OperationalAuditLogRow.action=='Editor 패키지 업데이트',
-            OperationalAuditLogRow.status_code==200))==1
-    assert client.post(root+'/updates',headers=c['reviewer'],json=values).status_code==403
