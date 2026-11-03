@@ -76,6 +76,8 @@ def test_partial_release_preserves_freeze_and_matches_presentation(ranking):
     assert revealed.json()['data']['revealed_count'] == 2
     board = public(contest, division)
     assert [row['solved'] for row in board['rows']] == [1, 1, 0]
+    assert [row['rank'] for row in board['rows']] == [2, 2, 1]
+    assert [row['rank_is_final'] for row in board['rows']] == [True, True, False]
     assert board['rows'][-1]['team_name'] == 'A-secret-team-0'
     assert board['rows'][-1]['submission_count'] == 0
     assert board['release']['ranks'] == []

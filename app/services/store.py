@@ -4708,18 +4708,22 @@ class DbStore:
                 complete = original["team_id"] in published
                 row = self._public_scoreboard_row(published.get(original["team_id"], original))
                 row["is_finalized"] = complete or row["team_id"] not in pending_teams
+                if release.strategy != "resolver":
+                    # A manual rank button announces a final position, not a
+                    # rank recalculated from final and frozen scores together.
+                    # Hidden rows retain only their frozen rank and records.
+                    row["rank_is_final"] = complete
                 for score in row["problem_scores"]:
                     if contest.freeze_submission_count_visible and not complete and not score["solved"]:
                         score["pending_attempts"] = pending_counts.get((row["team_id"], score["problem_id"]), 0)
                     else:
                         score.pop("pending_attempts", None)
                 rows.append(row)
-            # Rank from public scores only, not the hidden final standings.
             if release.strategy != "resolver":
-                ranking = deepcopy([published.get(row["team_id"], row) for row in state["rows"]])
-                self._rank_resolver_rows(ranking)
-                by_id = {row["team_id"]: row for row in rows}
-                rows = [{**by_id[row["team_id"]], "rank": row["rank"]} for row in ranking]
+                # Keep announced final ranks together, followed by unpublished
+                # teams in frozen order. Never arrange hidden team identities
+                # using the final snapshot, even into empty ranking slots.
+                rows.sort(key=lambda row: (not row["rank_is_final"], row["rank"]))
         return {"frozen": release.mode != "all", "rows": rows, "release": self._release_summary(release)}
 
     def scoreboard_rows(self, contest_id: str, division_id: str | None = None, public_view: bool = False, *, _cutoff_at: datetime | None = None, serialized: bool = False, response_division=None) -> dict | str | None:

@@ -9,10 +9,21 @@ Disabling it omits the field entirely. Public totals contain only public
 records. Shared submission lists filter hidden rows before counting/paging;
 participants retain their own submission access and staff retain actual results.
 
-Manual partial releases retain frozen records for unpublished teams and rank
-only the currently public scores. Public release metadata omits hidden final
-ranks and ties. Medals are displayed once the whole division is released.
-Both participant scoreboards and presentation endpoints use this projection.
+Manual rank announcements publish the selected final-rank group atomically,
+including all teams tied at that rank. During a partial release, announced rows
+come first in final-rank order and carry `rank_is_final: true`; their `rank`
+stays at the captured final position as other ranks are announced. Unpublished
+rows follow in their original frozen order with their frozen `rank` and
+`rank_is_final: false`. Clients present these as separate confirmed-rank and
+unannounced frozen-record groups, never as one mixed-score ranking. Hidden final
+positions, ties, scores and ordering are not included in the public projection.
+`is_finalized` still means that the team's result processing is complete; it
+does not announce a final rank. The rank-confirmation field is absent before
+announcements, after full release, and in the resolver/immediate strategies.
+Undo and resume retain the same snapshot and announced-rank groups. Medals are
+displayed once the whole division is released. Participant scoreboards, basic
+staff views and presentation endpoints use this projection; staff with actual
+scoreboard permission retain the separate internal results.
 
 Resolver `step`, `total_steps`, and `pending_count` count team/problem cells,
 not submissions. A next action selects the last displayed team with pending
