@@ -247,6 +247,7 @@ PRIVATE_PAGES = {
     "/admin/notices/new": "새 공지 작성",
     "/admin/judge": "채점 관리",
     "/admin/analytics": "운영 통계",
+    "/admin/mail": "메일 발송량",
     "/admin/audit-logs": "운영 로그",
     "/admin/inquiries": "문의 관리",
     "/operator": "대회 운영",
