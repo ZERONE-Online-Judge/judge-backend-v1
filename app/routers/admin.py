@@ -2,7 +2,7 @@ import asyncio
 from datetime import datetime, timedelta
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import BaseModel, EmailStr, Field, StrictBool, ConfigDict, field_validator, model_validator
 
 from app.models import ContestStatus, ContestVisibility, JudgeNode, now_utc
@@ -163,6 +163,14 @@ async def dashboard(request: Request):
             "active_judge_node_count": len([node for node in node_payloads if node["is_active"]]),
         },
     )
+
+
+@router.get("/admin/mail-usage")
+def admin_mail_usage(request: Request, response: Response):
+    require_service_master(request)
+    from app.services.resend_usage import mail_usage
+    response.headers["Cache-Control"] = "no-store"
+    return ok(request, mail_usage())
 
 
 @router.get("/admin/contests")
