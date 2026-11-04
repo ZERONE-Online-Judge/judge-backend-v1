@@ -7,7 +7,7 @@ import tempfile
 import re
 
 from app.models import ProblemAsset
-from app.services.package_builder import PackageBuildError, _prepare_program, _run_checker, _run_program, package_role
+from app.services.package_builder import PackageBuildError, _prepare_program, _run_checker, _run_program, package_role, required_package_resources
 from app.services.storage import object_storage
 from app.services.store import store
 
@@ -36,12 +36,7 @@ def build_verified_testcase_set(contest_id: str, problem_id: str, cases: list[Up
 
     validator_asset = _latest_required(role_assets, "validator", assets)
     checker_asset = _latest_required(role_assets, "checker", assets)
-    package_resources = role_assets.get("package-resource", [])
-    if not package_resources:
-        # fallback: role tagging이 잘못된 경우에도 testlib.h를 자원으로 자동 인식
-        package_resources = [asset for asset in assets if Path(asset.original_filename).name.lower() == "testlib.h"]
-    if not package_resources:
-        raise PackageBuildError("testlib.h package-resource file is required.")
+    package_resources = required_package_resources(assets)
 
     validated: list[tuple[UploadedTestcase, str, str]] = []
     with tempfile.TemporaryDirectory(prefix="zoj-testcase-verify-") as temp:
@@ -143,11 +138,7 @@ def verify_active_testcases_with_candidate_asset(contest_id: str, problem_id: st
         if role:
             role_assets.setdefault(role, []).append(asset)
 
-    package_resources = role_assets.get("package-resource", [])
-    if not package_resources:
-        package_resources = [asset for asset in assets if Path(asset.original_filename).name.lower() == "testlib.h"]
-    if not package_resources:
-        raise PackageBuildError("testlib.h package-resource file is required.")
+    package_resources = required_package_resources(assets)
 
     should_run_validator = candidate_role in {"validator", "package-resource"}
     should_run_checker = candidate_role in {"checker", "package-resource"}

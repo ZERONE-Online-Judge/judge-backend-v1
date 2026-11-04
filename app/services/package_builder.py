@@ -50,6 +50,21 @@ def package_role(asset: ProblemAsset) -> str | None:
     return None
 
 
+def testlib_header_assets(assets: list[ProblemAsset]) -> list[ProblemAsset]:
+    return [asset for asset in assets if Path(asset.original_filename.replace("\\", "/")).name.lower() == "testlib.h"]
+
+
+def required_package_resources(assets: list[ProblemAsset]) -> list[ProblemAsset]:
+    headers = testlib_header_assets(assets)
+    if not headers:
+        raise PackageBuildError("testlib.h package-resource file is required.")
+    resources = [asset for asset in assets if package_role(asset) == "package-resource"]
+    known = {asset.asset_id for asset in resources}
+    # Keep the existing filename fallback even when custom resources are present.
+    resources.extend(asset for asset in headers if asset.asset_id not in known)
+    return resources
+
+
 def _prepare_program(work_dir: Path, asset: ProblemAsset, resources: list[ProblemAsset]) -> PreparedProgram:
     work_dir.mkdir(parents=True, exist_ok=True)
     _copy_package_resources(work_dir, resources)
@@ -82,7 +97,7 @@ def _prepare_program(work_dir: Path, asset: ProblemAsset, resources: list[Proble
 
 def _copy_package_resources(work_dir: Path, resources: list[ProblemAsset]) -> None:
     for resource in resources:
-        resource_name = Path(resource.original_filename).name
+        resource_name = Path(resource.original_filename.replace("\\", "/")).name
         if not resource_name:
             continue
         target = work_dir / resource_name

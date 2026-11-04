@@ -20,7 +20,7 @@ from app.services.change_notices import ChangeNoticeRoute, allows_live_problem_c
 from app.services.contest_roles import ContestOperatorCreateRequest, ContestOperatorUpdateRequest, title_for_roles
 from app.services.errors import AppError, not_found, permission_denied
 from app.services.mail_templates import absolute_url, operator_assignment_mail, render_branded_email
-from app.services.package_builder import PackageBuildError, package_role, is_editor_source_asset
+from app.services.package_builder import PackageBuildError, package_role, is_editor_source_asset, testlib_header_assets
 from app.services.responses import ok, page
 from app.services.mail_logs import list_mail_logs, mail_log_filters, mail_log_preview
 from app.settings import settings
@@ -331,7 +331,8 @@ def _problem_package_status(contest_id: str, problem_id: str) -> dict:
     support_files = []
     warnings = []
     for role, label, required in required_roles:
-        files = sorted(role_assets.get(role, []), key=lambda item: item.created_at)
+        files = sorted(testlib_header_assets(assets) if role == "package-resource" else role_assets.get(role, []),
+                       key=lambda item: item.created_at)
         if required and not files:
             warnings.append(f"{label} 파일이 없습니다.")
         support_files.append(
