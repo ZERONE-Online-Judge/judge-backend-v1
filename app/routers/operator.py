@@ -21,6 +21,7 @@ from app.services.contest_roles import ContestOperatorCreateRequest, ContestOper
 from app.services.errors import AppError, not_found, permission_denied
 from app.services.mail_templates import absolute_url, operator_assignment_mail, render_branded_email
 from app.services.package_builder import PackageBuildError, package_role, is_editor_source_asset, testlib_header_assets
+from app.services.problem_order import problem_code_sort_key
 from app.services.responses import ok, page
 from app.services.mail_logs import list_mail_logs, mail_log_filters, mail_log_preview
 from app.settings import settings
@@ -1405,7 +1406,7 @@ def presentation_scoreboard(contest_id: str, request: Request, division_id: list
 async def operator_problems(contest_id: str, request: Request):
     account = require_contest_staff(request, contest_id, "contest.problem.view", "contest.problem.review")
     problems = [p for p in store.problems.values() if p.contest_id == contest_id]
-    problems.sort(key=lambda item: (item.display_order, item.problem_code, item.title, item.problem_id))
+    problems.sort(key=problem_code_sort_key)
     if not has_contest_permission(account, contest_id, "contest.problem.resource.view"):
         return page(request, [{**problem.model_dump(mode="json"), "editorial": "", "editorial_translations": {}} for problem in problems])
     teams = [

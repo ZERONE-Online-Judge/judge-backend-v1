@@ -9,6 +9,7 @@ from app.services.authz import has_contest_permission
 from app.services.editor_bridge import identity, staff
 from app.services.errors import AppError
 from app.services.problem_archive import CHUNK, import_archive
+from app.services.problem_order import problem_code_sort_key
 from app.services.responses import ok
 from app.routers.problem_archives import _receive
 from app.services import package_updates
@@ -43,8 +44,8 @@ def contest_problems(contest_id: str, request: Request):
         raise AppError(401, "editor_content_mismatch", "요청 내용이 인증 정보와 다릅니다.")
     with SessionLocal() as db:
         staff(db, email, contest_id)
-        rows = db.scalars(select(ProblemRow).where(ProblemRow.contest_id == contest_id)
-                          .order_by(ProblemRow.display_order, ProblemRow.problem_code)).all()
+        rows = sorted(db.scalars(select(ProblemRow).where(ProblemRow.contest_id == contest_id)).all(),
+                      key=problem_code_sort_key)
         return ok(request, {"problems": [{"id": row.problem_id, "title": row.title,
             "code": row.problem_code, "division_id": row.division_id} for row in rows]})
 

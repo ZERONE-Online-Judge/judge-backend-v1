@@ -2,6 +2,7 @@ from app.services.store import store
 from app.models import now_utc
 from app.services.presentation_access import aware
 from app.services.errors import not_found
+from app.services.problem_order import problem_code_sort_key
 
 
 def presentation_board(
@@ -50,14 +51,7 @@ def presentation_board(
             if problem.contest_id == contest_id
             and problem.division_id == division.division_id
         ]
-        problems.sort(
-            key=lambda item: (
-                item.display_order,
-                item.problem_code,
-                item.title,
-                item.problem_id,
-            )
-        )
+        problems.sort(key=problem_code_sort_key)
         sections.append(
             {
                 "division": division.model_dump(mode="json"),

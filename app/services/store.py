@@ -21,6 +21,7 @@ from app.settings import settings
 from app.problem_languages import validate_statement_fields
 from app.judge_languages import DEFAULT_LANGUAGES, LANGUAGES, NEW_LANGUAGES, RUNTIME_CAPABILITY, require_allowed, validate_languages
 from app.services.package_builder import is_editor_source_asset
+from app.services.problem_order import PROBLEM_ORDER_POLICY, problem_code_sort_key
 from app.models import (
     AccessLog,
     Contest,
@@ -714,8 +715,8 @@ class DbStore:
     def contest_problems(self, contest_id: str, division_id: str) -> list[Problem]:
         with self._session() as db:
             rows = db.scalars(select(ProblemRow).where(ProblemRow.contest_id == contest_id,
-                ProblemRow.division_id == division_id).order_by(ProblemRow.display_order)).all()
-            return [_problem(row) for row in rows]
+                ProblemRow.division_id == division_id)).all()
+            return [_problem(row) for row in sorted(rows, key=problem_code_sort_key)]
 
     def participant_solve_statuses(self, contest_id: str, team_id: str) -> dict[str, str]:
         with self._session() as db:
@@ -776,7 +777,7 @@ class DbStore:
     def problems(self) -> dict[str, Problem]:
         with self._session() as db:
             rows = db.scalars(select(ProblemRow)).all()
-            return {row.problem_id: _problem(row) for row in rows}
+            return {row.problem_id: _problem(row) for row in sorted(rows, key=problem_code_sort_key)}
 
     @property
     def teams(self) -> dict[str, ParticipantTeam]:
@@ -4478,9 +4479,10 @@ class DbStore:
         pending_keys = {(event["team_id"], event["problem_id"]) for event in pending}
         pending_teams = {team for team, _ in pending_keys}
         row = next(row for row in reversed(state["rows"]) if row["team_id"] in pending_teams)
-        # problem_scores is in the contest's problem display order, independent
-        # of submission chronology. Only the selected cell is chronological.
-        score = next(score for score in row["problem_scores"] if (row["team_id"], score["problem_id"]) in pending_keys)
+        # Existing saved announcements may retain an older display order.
+        # Choose by code without rewriting scores, ranks or undo identities.
+        score = min((score for score in row["problem_scores"]
+                     if (row["team_id"], score["problem_id"]) in pending_keys), key=problem_code_sort_key)
         events = [(index, event) for index, event in enumerate(pending)
                   if (event["team_id"], event["problem_id"]) == (row["team_id"], score["problem_id"])]
         inverse = {"row": deepcopy(row), "events": deepcopy(events),
@@ -4686,7 +4688,7 @@ class DbStore:
         row["problem_scores"] = [{
             **score, "penalty": None, "solved_at": None,
             "best_submission_id": None, "best_submitted_at": None,
-        } for score in original["problem_scores"]]
+        } for score in sorted(original["problem_scores"], key=problem_code_sort_key)]
         return row
 
     def _released_scoreboard(self, db: Session, release: ScoreboardReleaseRow, contest: ContestRow) -> dict:
@@ -4749,7 +4751,7 @@ class DbStore:
             cutoff = None
             if public_view and (immediate_hold or not (ended and strategy == "immediate")):
                 cutoff = self._scoreboard_cutoff(contest, now_utc(), resolver=immediate_hold or (ended and strategy == "resolver"))
-            identity = [contest_id, division_id, public_view, ended, cutoff, settings.feature_public_scoreboard_penalty,
+            identity = [PROBLEM_ORDER_POLICY, contest_id, division_id, public_view, ended, cutoff, settings.feature_public_scoreboard_penalty,
                         [contest.status, contest.start_at, contest.end_at, contest.freeze_at,
                          contest.scoreboard_freeze_mode, contest.scoreboard_frozen_at,
                          contest.scoreboard_release_mode, contest.freeze_submission_count_visible],
@@ -4796,8 +4798,8 @@ class DbStore:
                 ParticipantTeamRow.division_id).where(*team_filters).order_by(ParticipantTeamRow.team_name)).all()
             excluded_team_ids = {team.participant_team_id for team in teams if team.team_name.startswith(OPERATOR_TEST_TEAM_PREFIX)}
             teams = [team for team in teams if team.participant_team_id not in excluded_team_ids]
-            problems = db.execute(select(ProblemRow.problem_id, ProblemRow.problem_code)
-                .where(*problem_filters).order_by(ProblemRow.display_order, ProblemRow.problem_code, ProblemRow.title, ProblemRow.problem_id)).all()
+            problems = sorted(db.execute(select(ProblemRow.problem_id, ProblemRow.problem_code)
+                .where(*problem_filters)).all(), key=problem_code_sort_key)
             divisions = {
                 row.division_id: _division(row)
                 for row in db.scalars(select(ContestDivisionRow).where(ContestDivisionRow.contest_id == contest_id)).all()

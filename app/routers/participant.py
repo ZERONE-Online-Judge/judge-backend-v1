@@ -24,6 +24,7 @@ from app.services.participant_preview import (
 from app.services.store import OPERATOR_TEST_TEAM_PREFIX, SessionConflictError, store
 from app.services.storage import object_storage
 from app.services.package_builder import is_editor_source_asset
+from app.services.problem_order import problem_code_sort_key
 from app.settings import settings
 
 router = APIRouter(tags=["participant"])
@@ -43,7 +44,7 @@ def _page_slice(items: list, limit: int, cursor: str | None) -> tuple[list, str 
 
 
 def _sort_problems(items: list):
-    return sorted(items, key=lambda item: (item.display_order, item.problem_code, item.title, item.problem_id))
+    return sorted(items, key=problem_code_sort_key)
 
 
 def _problem_solve_statuses(contest_id: str, participant: dict | None) -> dict[str, str]:
