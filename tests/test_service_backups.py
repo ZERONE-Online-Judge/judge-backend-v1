@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -80,6 +81,35 @@ class Fixture(unittest.TestCase):
             'filesystem_uuid': 'uuid', 'origin_lv': '/dev/test/root', 'origin_uuid': 'origin-uuid',
             'volume_group': 'test', 'origin_name': 'root', 'restic': RESTIC or 'restic'})
         self.tool.state.mkdir()
+        # These temporary files model the dedicated disk, not CI host capacity.
+        capacity = patch.object(backup.shutil, 'disk_usage', return_value=SimpleNamespace(
+            total=300 * 1024**3, used=100 * 1024**3, free=200 * 1024**3))
+        self.disk_usage = capacity.start()
+        self.addCleanup(capacity.stop)
+
+    def test_low_backup_space_refuses_before_capture(self):
+        # Exercise the absolute 10 GiB floor and the independent 5% reserve.
+        for total, free in [(100, 9), (300, 14)]:
+            self.disk_usage.return_value = SimpleNamespace(total=total * 1024**3,
+                used=(total - free) * 1024**3, free=free * 1024**3)
+            with self.subTest(total=total, free=free), patch.object(self.tool, 'guard'), \
+                 patch.object(self.tool, 'inventory') as inventory, patch.object(self.tool, 'restic') as restic, \
+                 self.assertRaisesRegex(RuntimeError, 'less than 5% or 10 GiB free'):
+                self.tool.backup()
+            inventory.assert_not_called()
+            restic.assert_not_called()
+            self.assertFalse(self.tool.repo.exists())
+
+    def test_low_restore_space_refuses_before_restore(self):
+        self.disk_usage.return_value = SimpleNamespace(total=100 * 1024**3,
+            used=81 * 1024**3, free=19 * 1024**3)
+        with patch.object(self.tool, 'guard'), patch.object(self.tool, 'snapshots', return_value=[{
+            'id': '1', 'time': backup.now(), 'tags': [backup.TAG]}]), \
+             patch.object(self.tool, 'restic') as restic, patch.object(self.tool, 'verify_services') as verify, \
+             self.assertRaisesRegex(RuntimeError, 'At least 20 GiB free'):
+            self.tool.drill()
+        restic.assert_not_called()
+        verify.assert_not_called()
 
     def test_inventory_includes_all_services_legacy_volumes_and_external_overrides(self):
         override = self.directory / 'capacity.override.yaml'
