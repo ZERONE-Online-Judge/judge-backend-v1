@@ -1,4 +1,4 @@
-"""Problem lists and saved announcements share ordinal code ordering."""
+"""Problem lists and saved announcements share natural code ordering."""
 import os
 from copy import deepcopy
 from datetime import timedelta
@@ -22,7 +22,7 @@ from test_editor_bridge import KEY, headers as bridge_headers
 
 
 client = TestClient(app)
-EXPECTED = ["A1", "A10", "A2", "B"]
+EXPECTED = ["A1", "A2", "A10", "B"]
 
 
 def login(email):
@@ -61,7 +61,7 @@ def codes(items):
     return [item["problem_code"] for item in items]
 
 
-def test_sort_key_is_ordinal_and_ignores_titles_and_manual_display_order():
+def test_sort_key_is_natural_and_ignores_titles_and_manual_display_order():
     values = [
         {"problem_code": "A2", "problem_id": "first", "display_order": 1},
         {"problem_code": "A10", "problem_id": "second", "display_order": 2},
@@ -73,10 +73,44 @@ def test_sort_key_is_ordinal_and_ignores_titles_and_manual_display_order():
         {"problem_code": "\U00010000", "problem_id": "supplementary"},
         {"problem_code": "가", "problem_id": "korean"},
     ]
-    expected = ["a", "z", "second", "first", "upper", "lower", "korean", "supplementary", "emoji"]
+    expected = ["a", "z", "first", "second", "upper", "lower", "korean", "supplementary", "emoji"]
     assert [item["problem_id"] for item in sorted(values, key=problem_code_sort_key)] == expected
     assert [item.problem_id for item in sorted([SimpleNamespace(**value) for value in values],
         key=problem_code_sort_key)] == expected
+
+
+@pytest.mark.parametrize("values,expected", [
+    (["A10", "A2", "A1"], ["A1", "A2", "A10"]),
+    (["A10", "A2B10", "A2B2"], ["A2B2", "A2B10", "A10"]),
+    (["A2", "A02", "A0002", "A2B", "A02B", "A2C"],
+     ["A0002", "A02", "A2", "A02B", "A2B", "A2C"]),
+    (["A01", "A000", "A1", "A00", "A0"], ["A0", "A00", "A000", "A01", "A1"]),
+    (["A009", "A10", "A00011", "A2"], ["A2", "A009", "A10", "A00011"]),
+    (["A/", "A1", "A!", "A:", "A0", "A9"], ["A!", "A/", "A0", "A1", "A9", "A:"]),
+    (["A２", "A١", "A10", "A2", "Aé"], ["A2", "A10", "Aé", "A١", "A２"]),
+    (["é10", "가10", "\U0001f6002", "a2", "é2", "가2", "\U000100002", "Z2"],
+     ["Z2", "a2", "é2", "é10", "가2", "가10", "\U000100002", "\U0001f6002"]),
+    (["A2B02", "A02B2", "A02B002"], ["A02B002", "A02B2", "A2B02"]),
+    (["A02B10", "A2B2"], ["A2B2", "A02B10"]),
+    (["A1A", "A01A", "A001", "A1"], ["A001", "A1", "A01A", "A1A"]),
+])
+def test_natural_sort_handles_zeroes_multiple_runs_and_unicode(values, expected):
+    items = [{"problem_code": code, "problem_id": str(index)} for index, code in enumerate(values)]
+    assert codes(sorted(items, key=problem_code_sort_key)) == expected
+
+
+def test_numeric_runs_are_not_limited_by_integer_or_float_precision():
+    small = "A" + "9" * 6000
+    larger = "A1" + "0" * 6000
+    next_larger = "A1" + "0" * 5999 + "1"
+    items = [{"problem_code": code, "problem_id": str(index)} for index, code in enumerate(
+        [next_larger, larger, small, "A" + "0" * 100 + "9" * 6000])]
+    assert codes(sorted(items, key=problem_code_sort_key)) == ["A" + "0" * 100 + "9" * 6000, small, larger, next_larger]
+
+
+def test_identical_codes_keep_ordinal_problem_id_ties():
+    items = [{"problem_code": "A2", "problem_id": value} for value in ("id2", "id10")]
+    assert [item["problem_id"] for item in sorted(items, key=problem_code_sort_key)] == ["id10", "id2"]
 
 
 @pytest.mark.parametrize("authenticated", [False, True])
@@ -141,7 +175,7 @@ def test_saved_release_scores_are_sorted_only_in_the_public_projection(contest, 
         snapshots = deepcopy(release.snapshot_rows)
         state = deepcopy(release.resolver_state)
         for row in snapshots + state["rows"]:
-            row["problem_scores"].reverse()
+            row["problem_scores"].sort(key=lambda score: score["problem_code"])
         release.snapshot_rows, release.resolver_state, release.mode = snapshots, state, mode
         db.commit()
         stored = (deepcopy(snapshots), deepcopy(state))
@@ -159,17 +193,22 @@ def test_existing_resolver_uses_code_order_and_undo_preserves_saved_cell_identit
     with store._session() as db:
         release = db.get(ScoreboardReleaseRow, contest["did"])
         state = deepcopy(release.resolver_state)
-        state["rows"][0]["problem_scores"].reverse()
+        state["rows"][0]["problem_scores"].sort(key=lambda score: score["problem_code"])
         release.resolver_state = state
-        before = deepcopy(state)
-        inverse = store._advance_resolver(release)
-        assert release.resolver_state["last_event"]["problem_code"] == "A1"
-        assert release.resolver_state["rows"][0]["solved"] == 1
-        assert inverse["row"] == before["rows"][0]
-        release.undo_history = [{"action": "next", "mode": "partial", "revealed_ranks": [], "resolver_delta": inverse}]
-        store._undo_scoreboard_release(release)
-        assert release.resolver_state == before
-        assert release.resolver_state["rows"][0]["problem_scores"][0]["problem_code"] == "B"
+        assert codes(state["rows"][0]["problem_scores"]) == ["A1", "A10", "A2", "B"]
+        for step, expected in enumerate(("A1", "A2", "A10"), start=1):
+            before = deepcopy(release.resolver_state)
+            inverse = store._advance_resolver(release)
+            assert release.resolver_state["last_event"]["problem_code"] == expected
+            assert release.resolver_state["rows"][0]["solved"] == step
+            assert inverse["row"] == before["rows"][0]
+            after = deepcopy(release.resolver_state)
+            release.undo_history = [{"action": "next", "mode": "partial", "revealed_ranks": [], "resolver_delta": inverse}]
+            store._undo_scoreboard_release(release)
+            assert release.resolver_state == before
+            assert codes(release.resolver_state["rows"][0]["problem_scores"]) == ["A1", "A10", "A2", "B"]
+            store._advance_resolver(release)
+            assert release.resolver_state == after
 
 
 def test_order_policy_changes_the_shared_scoreboard_cache_identity(contest, monkeypatch):
