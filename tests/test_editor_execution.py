@@ -41,8 +41,8 @@ def enqueue(value=None, *, content=None):
     return client.post(path, content=content, headers=headers('POST', path, content))
 
 
-def create_direct(value):
-    content = pack(value)
+def create_direct(value, *, content=None):
+    content = pack(value) if content is None else content
     return execution.create(EMAIL, content, hashlib.sha256(content).hexdigest())
 
 
@@ -69,19 +69,21 @@ def test_slow_tool_upload_does_not_block_another_request(execution_db, short_loc
 
 def test_failed_tool_upload_resumes_same_task(execution_db, monkeypatch):
     value = payload()
+    # Real retries reuse the original archive; repacking can change ZIP timestamps.
+    content = pack(value)
     write = object_storage.write_bytes
     def unavailable(*args, **kwargs):
         raise OSError('temporary storage outage')
     monkeypatch.setattr(object_storage, 'write_bytes', unavailable)
     with pytest.raises(AppError) as failure:
-        create_direct(value)
+        create_direct(value, content=content)
     assert failure.value.status_code == 503
     with execution_db() as db:
         task = db.scalar(select(Task))
         assert task.status == 'uploading'
         task_id = task.task_id
     monkeypatch.setattr(object_storage, 'write_bytes', write)
-    result = create_direct(value)
+    result = create_direct(value, content=content)
     assert result['id'] == task_id and result['status'] == 'waiting'
     with execution_db() as db:
         assert db.scalar(select(func.count()).select_from(Task)) == 1
