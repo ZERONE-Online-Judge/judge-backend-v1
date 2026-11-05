@@ -10,12 +10,13 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 import zipfile
 from datetime import timedelta
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
-from sqlalchemy import create_engine, event, func, select
+from sqlalchemy import case, create_engine, event, func, select
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
@@ -476,7 +477,9 @@ def test_disabled_node_and_admission_limit(database):
     assert submit(snapshot()).status_code == 429
 
 
-def test_remaining_tests_reuse_snapshot_and_keep_fallback_data(database):
+@pytest.mark.parametrize("monotonic_seconds", [5.0, 10000.0])
+@pytest.mark.parametrize("parent_first", [True, False])
+def test_remaining_tests_reuse_snapshot_and_keep_fallback_data(database, monkeypatch, monotonic_seconds, parent_first):
     parent = submit(snapshot()).json()["data"]["id"]
     node_id = node()
     job = claim(node_id)[0]
@@ -508,8 +511,28 @@ def test_remaining_tests_reuse_snapshot_and_keep_fallback_data(database):
         all_keys = list(original.payload["dataset_storage_keys"])
         original.created_at = variant.created_at = now_utc() - timedelta(hours=50)
         db.commit()
-    judging._last_maintenance = 0
+    # Zero is not an elapsed minute on a freshly booted CI runner.
+    monkeypatch.setattr(judging, 'time', SimpleNamespace(monotonic=lambda: monotonic_seconds))
+    monkeypatch.setattr(judging, '_last_maintenance', monotonic_seconds - 61)
+    previous_select = judging.select
+    order = {parent: 0 if parent_first else 1, child: 1 if parent_first else 0}
+    def ordered_select(*entities):
+        statement = previous_select(*entities)
+        if len(entities) == 1 and entities[0] is Run.run_id:
+            statement = statement.order_by(case(order, value=Run.run_id))
+        return statement
+    monkeypatch.setattr(judging, 'select', ordered_select)
+    deleted = []
+    previous_delete = object_storage.delete
+    def delete_last_reference(key):
+        if key in all_keys:
+            with database() as db:
+                assert db.scalar(select(func.count()).select_from(Run)) == 1
+            deleted.append(key)
+        previous_delete(key)
+    monkeypatch.setattr(object_storage, 'delete', delete_last_reference)
     judging.maintenance(database)
+    assert set(deleted) == set(all_keys)
     assert all(object_storage.size_bytes(key) is None for key in all_keys)
     with database() as db:
         assert db.get(Run, parent) is None and db.get(Run, child) is None
