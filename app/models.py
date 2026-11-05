@@ -47,6 +47,7 @@ class ScoreboardFreezeMode(StrEnum):
 
 class ScoreboardReleaseMode(StrEnum):
     MANUAL = "manual"
+    MANUAL_ALL = "manual_all"
     IMMEDIATE = "immediate"
     RESOLVER = "resolver"
 
@@ -143,7 +144,7 @@ class Contest(BaseModel):
     notice_access_after_end: ContestResourceAccess = ContestResourceAccess.PUBLIC
     editorial_access_after_end: ContestResourceAccess = ContestResourceAccess.PRIVATE
     scoreboard_freeze_mode: ScoreboardFreezeMode = ScoreboardFreezeMode.AUTO
-    scoreboard_release_mode: ScoreboardReleaseMode = ScoreboardReleaseMode.MANUAL
+    scoreboard_release_mode: ScoreboardReleaseMode = ScoreboardReleaseMode.RESOLVER
     scoreboard_release_locked: bool = False
     mock_judging_enabled: bool = False
     freeze_submission_count_visible: bool = False

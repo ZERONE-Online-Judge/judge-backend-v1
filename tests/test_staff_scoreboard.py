@@ -25,7 +25,7 @@ def rows(board):
     return [{key: value for key, value in row.items() if key != "visible_to_team"} for row in board["rows"]]
 
 
-@pytest.mark.parametrize("mode", ["manual", "resolver", "immediate"])
+@pytest.mark.parametrize("mode", ["manual", "manual_all", "resolver", "immediate"])
 @pytest.mark.parametrize("ended", [False, True])
 @pytest.mark.parametrize("counts", [False, True])
 def test_started_staff_receive_only_participant_scores_and_statistics(race, mode, ended, counts):

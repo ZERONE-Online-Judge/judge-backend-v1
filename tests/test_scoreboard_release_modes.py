@@ -32,7 +32,7 @@ def race():
     start = now - timedelta(hours=3)
     contest = store.create_contest("Scoreboard release modes", "Test", "", start_at=start,
         freeze_at=start + timedelta(hours=1), end_at=start + timedelta(hours=2), status=ContestStatus.ENDED)
-    store.update_contest_settings(contest.contest_id, scoreboard_access_after_end="public", scoreboard_public_during_contest=True, freeze_submission_count_visible=True)
+    store.update_contest_settings(contest.contest_id, scoreboard_release_mode="manual", scoreboard_access_after_end="public", scoreboard_public_during_contest=True, freeze_submission_count_visible=True)
     divisions = [store.create_contest_division(contest.contest_id, code, code) for code in ("A", "B")]
     teams, submissions = {}, {}
     for division in divisions:
@@ -110,7 +110,7 @@ def visible_scores(board):
     return [(row["team_name"], row["rank"], row["solved"], row["penalty"]) for row in board["rows"]]
 
 
-def test_manual_remains_default_and_keeps_frozen_scores_after_end(race):
+def test_explicit_manual_keeps_frozen_scores_after_end(race):
     assert store.contests[race["cid"]].scoreboard_release_mode == "manual"
     board = public(race)
     assert board["frozen"] is True
@@ -264,7 +264,7 @@ def test_release_mode_is_locked_after_any_division_starts(race, initial):
     set_mode(race, initial)
     response = client.post(release_url(race, race["divisions"][1]), headers=race["headers"], json={"action": "start"})
     assert response.status_code == 200
-    for next_mode in {"manual", "immediate", "resolver"} - {initial}:
+    for next_mode in {"manual", "manual_all", "immediate", "resolver"} - {initial}:
         response = client.patch(settings_url(race), headers=race["headers"], json={"scoreboard_release_mode": next_mode})
         assert response.status_code == 409, response.text
     unchanged = client.patch(settings_url(race), headers=race["headers"], json={"scoreboard_release_mode": initial})

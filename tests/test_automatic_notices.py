@@ -170,7 +170,7 @@ def test_live_scoreboard_does_not_announce_a_freeze(contest):
     assert notices(contest) == []
 
 
-@pytest.mark.parametrize("release_mode", ["manual", "immediate", "resolver"])
+@pytest.mark.parametrize("release_mode", ["manual", "manual_all", "immediate", "resolver"])
 def test_end_notice_is_short_and_does_not_promise_unreleased_rankings(contest, release_mode):
     contest, now = contest
     store.update_contest_settings(contest.contest_id, freeze_at=now - timedelta(hours=1), end_at=now - timedelta(minutes=1), scoreboard_access_after_end="public", scoreboard_release_mode=release_mode)

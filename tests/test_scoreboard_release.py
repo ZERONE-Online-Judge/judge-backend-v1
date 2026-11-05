@@ -20,7 +20,7 @@ def ranking():
     now = now_utc()
     contest = store.create_contest('Release test', 'Test', '', start_at=now-timedelta(hours=3),
         freeze_at=now-timedelta(hours=2), end_at=now-timedelta(hours=1), status=ContestStatus.ENDED)
-    store.update_contest_settings(contest.contest_id, scoreboard_access_after_end=ContestResourceAccess.PUBLIC)
+    store.update_contest_settings(contest.contest_id, scoreboard_release_mode="manual", scoreboard_access_after_end=ContestResourceAccess.PUBLIC)
     divisions = [store.create_contest_division(contest.contest_id, code, code) for code in ('A', 'B')]
     submission_ids = []
     for division in divisions:

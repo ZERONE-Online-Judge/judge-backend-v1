@@ -1214,10 +1214,10 @@ class DbStore:
                     continue
                 release = db.get(ScoreboardReleaseRow, did) if ended else None
                 active = release and release.mode != "not_started"
-                if (active and release.mode == "all") or (ended and strategy == "immediate" and not active):
+                if (active and release.mode == "all") or self._live_scoreboard_released(strategy, ended, release):
                     clauses.append(SubmissionRow.division_id == did)
                     continue
-                cutoff = self._scoreboard_cutoff(contest, now_utc(), resolver=ended and (strategy == "resolver" or (strategy == "immediate" and active)))
+                cutoff = self._public_scoreboard_cutoff(contest, now_utc(), release)
                 if cutoff is None:
                     clauses.append(SubmissionRow.division_id == did)
                     continue
@@ -4330,6 +4330,31 @@ class DbStore:
             return freeze_at
         return None
 
+    @staticmethod
+    def _live_scoreboard_released(strategy: str, ended: bool, release: ScoreboardReleaseRow | None) -> bool:
+        return bool(ended and (
+            (strategy == "immediate" and not (release and release.mode == "partial"))
+            or (strategy == "manual_all" and release and release.mode == "all")
+        ))
+
+    def _public_scoreboard_cutoff(self, contest: ContestRow, now: datetime, release: ScoreboardReleaseRow | None) -> datetime | None:
+        ended = self._scoreboard_ended(contest)
+        strategy = contest.scoreboard_release_mode or "manual"
+        if self._live_scoreboard_released(strategy, ended, release):
+            return None
+        force_hold = ended and (strategy in {"resolver", "manual_all"}
+            or (strategy == "immediate" and release and release.mode == "partial"))
+        return self._scoreboard_cutoff(contest, now, resolver=bool(force_hold))
+
+    def _live_release_summary(self, strategy: str, release: ScoreboardReleaseRow | None, team_count: int, *, include_undo: bool = False) -> dict:
+        automatic = strategy == "immediate" and (release is None or release.mode == "not_started")
+        result = (self._immediate_release_summary([], include_undo=include_undo) if automatic
+                  else self._release_summary(release, strategy, include_undo=include_undo))
+        result.update(total_count=team_count, revealed_count=team_count if result["mode"] == "all" else 0)
+        if include_undo:
+            result["revision"] = (release.revision or 0) if release else 0
+        return result
+
     def scoreboard_release(self, contest_id: str, division_id: str) -> dict | None:
         with self._session() as db:
             contest = db.get(ContestRow, contest_id)
@@ -4338,18 +4363,13 @@ class DbStore:
                 return None
             release = db.get(ScoreboardReleaseRow, division_id)
             strategy = contest.scoreboard_release_mode or "manual"
-            if strategy == "immediate" and self._scoreboard_ended(contest):
+            if strategy in {"immediate", "manual_all"} and self._scoreboard_ended(contest):
                 team_count = db.scalar(select(func.count()).select_from(ParticipantTeamRow).where(
                     ParticipantTeamRow.contest_id == contest_id,
                     ParticipantTeamRow.division_id == division_id,
                     ~ParticipantTeamRow.team_name.startswith(OPERATOR_TEST_TEAM_PREFIX),
                 )) or 0
-                result = (self._release_summary(release, include_undo=True)
-                          if release and release.mode != "not_started"
-                          else self._immediate_release_summary([], include_undo=True))
-                result.update(total_count=team_count, revealed_count=team_count if result["mode"] == "all" else 0,
-                              revision=(release.revision or 0) if release else 0)
-                return result
+                return self._live_release_summary(strategy, release, team_count, include_undo=True)
             if release:
                 return self._release_summary(release, strategy, include_undo=True)
             return self._release_summary(None, strategy, include_undo=True)
@@ -4569,7 +4589,7 @@ class DbStore:
             if not self._scoreboard_ended(contest):
                 raise ValueError("대회 종료 후에 순위를 공개하거나 되돌릴 수 있습니다.")
             strategy = contest.scoreboard_release_mode or "manual"
-            allowed = {"all", "undo"} if strategy == "immediate" else ({"start", "next", "all", "undo"} if strategy == "resolver" else {"start", "rank", "all", "undo"})
+            allowed = {"all", "undo"} if strategy in {"immediate", "manual_all"} else ({"start", "next", "all", "undo"} if strategy == "resolver" else {"start", "rank", "all", "undo"})
             if action not in allowed:
                 raise ValueError("선택한 공개 방식에서 지원하지 않는 동작입니다.")
             release = db.get(ScoreboardReleaseRow, division_id)
@@ -4578,6 +4598,25 @@ class DbStore:
                 raise ValueError("최신 공개 상태를 확인한 뒤 다시 되돌려 주세요.")
             if expected_revision is not None and expected_revision != revision:
                 raise ValueError("다른 화면에서 공개 상태가 변경되었습니다. 최신 상태를 확인한 뒤 다시 시도하세요.")
+
+            if strategy == "manual_all":
+                if action == "undo":
+                    if release is None or release.mode != "all":
+                        raise ValueError("되돌릴 순위 공개 기록이 없습니다.")
+                    self._undo_scoreboard_release(release)
+                elif release is None or release.mode != "all":
+                    if release is None:
+                        release = ScoreboardReleaseRow(contest_id=contest_id, division_id=division_id)
+                        db.add(release)
+                    self._reset_scoreboard_release(release)
+                    release.strategy = "manual_all"
+                    release.mode = "all"
+                    release.undo_history = [{"action": "all", "mode": "not_started"}]
+                else:
+                    return self.scoreboard_release(contest_id, division_id)
+                release.revision = revision + 1
+                db.commit()
+                return self.scoreboard_release(contest_id, division_id)
 
             if strategy == "immediate":
                 # A hold overrides automatic release for this division only;
@@ -4747,15 +4786,17 @@ class DbStore:
             ended = self._scoreboard_ended(contest)
             release = db.get(ScoreboardReleaseRow, division_id) if public_view and division_id and ended else None
             strategy = contest.scoreboard_release_mode or "manual"
-            immediate_hold = bool(ended and strategy == "immediate" and release and release.mode == "partial")
-            cutoff = None
-            if public_view and (immediate_hold or not (ended and strategy == "immediate")):
-                cutoff = self._scoreboard_cutoff(contest, now_utc(), resolver=immediate_hold or (ended and strategy == "resolver"))
+            aggregate_releases = (db.execute(select(ScoreboardReleaseRow.division_id,
+                ScoreboardReleaseRow.mode, ScoreboardReleaseRow.revision).where(
+                ScoreboardReleaseRow.contest_id == contest_id).order_by(ScoreboardReleaseRow.division_id)).all()
+                if public_view and ended and strategy == "manual_all" and division_id is None else None)
+            cutoff = self._public_scoreboard_cutoff(contest, now_utc(), release) if public_view else None
             identity = [PROBLEM_ORDER_POLICY, contest_id, division_id, public_view, ended, cutoff, settings.feature_public_scoreboard_penalty,
                         [contest.status, contest.start_at, contest.end_at, contest.freeze_at,
                          contest.scoreboard_freeze_mode, contest.scoreboard_frozen_at,
                          contest.scoreboard_release_mode, contest.freeze_submission_count_visible],
-                        [release.mode, release.strategy, release.revision] if release else None]
+                        [release.mode, release.strategy, release.revision] if release else None,
+                        [list(row) for row in aggregate_releases] if aggregate_releases is not None else None]
         return cached_result(f"scoreboard:{contest_id}", identity, settings.scoreboard_cache_ttl_seconds,
             compute, serialized=serialized, snapshot=serialized and not ended, compressed=response_division is not None)
 
@@ -4770,16 +4811,26 @@ class DbStore:
             release = None
             if public_view and division_id:
                 release = db.get(ScoreboardReleaseRow, division_id) if ended else None
-                if release and release.mode != "not_started" and strategy != "immediate":
+                if release and release.mode != "not_started" and strategy not in {"immediate", "manual_all"}:
                     return self._released_scoreboard(db, release, contest)
 
             cutoff_at = _cutoff_at
             frozen = False
             now = now_utc()
-            immediate_hold = bool(ended and strategy == "immediate" and release and release.mode == "partial")
-            if public_view and (immediate_hold or not (ended and strategy == "immediate")):
-                cutoff_at = self._scoreboard_cutoff(contest, now, resolver=immediate_hold or (ended and strategy == "resolver"))
+            aggregate_all = public_view and ended and strategy == "manual_all" and division_id is None
+            published_divisions: set[str] = set()
+            public_filter = None
+            if public_view:
+                cutoff_at = self._public_scoreboard_cutoff(contest, now, release)
                 frozen = cutoff_at is not None
+            if aggregate_all:
+                division_ids = set(db.scalars(select(ContestDivisionRow.division_id).where(
+                    ContestDivisionRow.contest_id == contest_id)).all())
+                published_divisions = set(db.scalars(select(ScoreboardReleaseRow.division_id).where(
+                    ScoreboardReleaseRow.contest_id == contest_id, ScoreboardReleaseRow.mode == "all")).all())
+                frozen = bool(division_ids - published_divisions)
+                cutoff_at = None
+                public_filter = self._public_submission_filter(contest_id, None)
 
             team_filters = [ParticipantTeamRow.contest_id == contest_id]
             problem_filters = [ProblemRow.contest_id == contest_id]
@@ -4793,6 +4844,8 @@ class DbStore:
                 submission_filters.append(SubmissionRow.division_id == division_id)
             if cutoff_at:
                 submission_filters.append(SubmissionRow.submitted_at <= cutoff_at)
+            if public_filter is not None:
+                submission_filters.append(public_filter)
 
             teams = db.execute(select(ParticipantTeamRow.participant_team_id, ParticipantTeamRow.team_name,
                 ParticipantTeamRow.division_id).where(*team_filters).order_by(ParticipantTeamRow.team_name)).all()
@@ -4975,7 +5028,7 @@ class DbStore:
                 hidden_filters = [
                     SubmissionRow.contest_id == contest_id,
                     SubmissionRow.submission_kind == "participant",
-                    SubmissionRow.submitted_at > cutoff_at,
+                    ~public_filter if public_filter is not None else SubmissionRow.submitted_at > cutoff_at,
                 ]
                 if division_id:
                     hidden_filters.append(SubmissionRow.division_id == division_id)
@@ -5018,10 +5071,12 @@ class DbStore:
             if not public_view:
                 result["problem_stats"] = problem_stats
             else:
-                result["release"] = (self._immediate_release_summary(rows) if ended and strategy == "immediate" and not immediate_hold else
-                    self._release_summary(release, strategy))
-                if strategy == "immediate" and release:
-                    result["release"].update(total_count=len(rows), revealed_count=0 if immediate_hold else len(rows))
+                result["release"] = (self._live_release_summary(strategy, release, len(rows))
+                    if ended and strategy in {"immediate", "manual_all"} else self._release_summary(release, strategy))
+                if aggregate_all:
+                    result["release"].update(mode="partial" if frozen and published_divisions else
+                        ("not_started" if frozen or not published_divisions else "all"),
+                        revealed_count=sum(row["division_id"] in published_divisions for row in rows))
             return result
 
     def _mail_exists(self, db: Session, mail_type: str, recipient_email: str, subject: str, contest_id: str | None = None) -> bool:

@@ -155,7 +155,8 @@ def test_login_throttle_is_shared_and_recovers_after_the_window():
 def test_display_obeys_rank_release_and_does_not_leak_hidden_team(setup):
     cid, did, endpoint, headers, account = setup
     session = login(account['email']).json()['data']
-    store.update_contest_settings(cid, status=ContestStatus.ENDED, end_at=now_utc() - timedelta(seconds=1))
+    store.update_contest_settings(cid, scoreboard_release_mode="manual", status=ContestStatus.ENDED,
+        end_at=now_utc() - timedelta(seconds=1))
     store.update_scoreboard_release(cid, did, 'start')
     response = display(cid, session)
     assert response.status_code == 200

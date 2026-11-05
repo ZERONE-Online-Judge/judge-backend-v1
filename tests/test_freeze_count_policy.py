@@ -30,7 +30,7 @@ def add_attempt(race, name, code, minute, status):
         db.commit()
 
 
-@pytest.mark.parametrize("mode", ["manual", "immediate", "resolver"])
+@pytest.mark.parametrize("mode", ["manual", "manual_all", "immediate", "resolver"])
 @pytest.mark.parametrize("ended", [False, True])
 @pytest.mark.parametrize("enabled", [False, True])
 def test_count_policy_across_modes_and_lifecycle(race, mode, ended, enabled):

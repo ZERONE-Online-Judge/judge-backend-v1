@@ -25,7 +25,7 @@ def ceremony():
         start_at=start, freeze_at=start + timedelta(minutes=60),
         end_at=start + timedelta(minutes=120), status=ContestStatus.ENDED)
     store.update_contest_settings(contest.contest_id,
-        scoreboard_access_after_end="public", freeze_submission_count_visible=True)
+        scoreboard_release_mode="manual", scoreboard_access_after_end="public", freeze_submission_count_visible=True)
     division = store.create_contest_division(contest.contest_id, "A", "A")
     teams, submissions = {}, {}
     with store._session() as db:

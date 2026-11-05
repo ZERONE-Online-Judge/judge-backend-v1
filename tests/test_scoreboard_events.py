@@ -133,10 +133,15 @@ def test_selected_divisions_are_filtered_before_scoreboards_are_computed(
         } == {did, other}
 
 
-def test_committed_release_changes_reach_the_stream_without_score_payloads(setup):
+@pytest.mark.parametrize("strategy,actions", [
+    ("manual", ("start", "rank", "undo")),
+    ("manual_all", ("all", "undo", "all")),
+])
+def test_committed_release_changes_reach_the_stream_without_score_payloads(setup, strategy, actions):
     cid, did, _, _, _ = setup
     with SessionLocal.begin() as db:
         db.get(ContestRow, cid).status = "ended"
+        db.get(ContestRow, cid).scoreboard_release_mode = strategy
 
     async def run():
         stream = events.scoreboard_events(Connected(), cid, lambda: None)
@@ -144,7 +149,7 @@ def test_committed_release_changes_reach_the_stream_without_score_payloads(setup
             assert await anext(stream) == "event: scoreboard_update\ndata: {}\n\n"
             # Consume the monitor's initial version before changing another connection.
             await asyncio.wait_for(anext(stream), 2)
-            for action in ("start", "rank", "undo"):
+            for action in actions:
                 release = store.scoreboard_release(cid, did)
                 at = time.monotonic()
                 store.update_scoreboard_release(
