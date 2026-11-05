@@ -566,6 +566,7 @@ def operator_access_logs(
         raise not_found()
     logs, next_cursor, total_count = store.list_access_logs(
         contest_id=contest_id,
+        exclude_service_master=True,
         email=email or None,
         limit=limit,
         cursor=cursor,
@@ -585,7 +586,7 @@ def operator_access_log_stats(contest_id: str, request: Request):
     require_contest_staff(request, contest_id, "contest.access_log.view")
     if contest_id not in store.contests:
         raise not_found()
-    return ok(request, store.access_log_stats(contest_id=contest_id))
+    return ok(request, store.access_log_stats(contest_id=contest_id, exclude_service_master=True))
 
 
 @router.get("/operator/contests/{contest_id}/divisions")

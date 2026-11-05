@@ -1085,6 +1085,7 @@ class DbStore:
         account_scope: str | None = None,
         contest_id: str | None = None,
         email: str | None = None,
+        exclude_service_master: bool = False,
         limit: int = 100,
         cursor: str | None = None,
     ) -> tuple[list[AccessLog], str | None, int]:
@@ -1100,6 +1101,8 @@ class DbStore:
             filters.append(AccessLogRow.contest_id == contest_id)
         if email:
             filters.append(AccessLogRow.email == email.strip().lower())
+        if exclude_service_master:
+            filters.append(self._non_service_master_access())
 
         base = select(AccessLogRow)
         count_stmt = select(func.count()).select_from(AccessLogRow)
@@ -1117,15 +1120,24 @@ class DbStore:
             next_cursor = str(next_offset) if next_offset < total_count else None
             return [_access_log(row) for row in rows], next_cursor, total_count
 
-    def access_log_stats(self, *, contest_id: str | None = None) -> dict:
-        return cached_result("access-stats", contest_id, settings.access_stats_cache_ttl_seconds,
-                             lambda: self._access_log_stats_uncached(contest_id=contest_id))
+    @staticmethod
+    def _non_service_master_access():
+        # The recorded role is authoritative. Preserve unknown historical roles
+        # and participant events, irrespective of the account's current role.
+        return func.coalesce(AccessLogRow.actor_role, "") != "service_master"
 
-    def _access_log_stats_uncached(self, *, contest_id: str | None = None) -> dict:
+    def access_log_stats(self, *, contest_id: str | None = None, exclude_service_master: bool = False) -> dict:
+        return cached_result("access-stats", [contest_id, exclude_service_master], settings.access_stats_cache_ttl_seconds,
+                             lambda: self._access_log_stats_uncached(contest_id=contest_id,
+                                 exclude_service_master=exclude_service_master))
+
+    def _access_log_stats_uncached(self, *, contest_id: str | None = None, exclude_service_master: bool = False) -> dict:
         since = now_utc() - timedelta(hours=24)
         filters = [AccessLogRow.created_at >= since]
         if contest_id:
             filters.append(AccessLogRow.contest_id == contest_id)
+        if exclude_service_master:
+            filters.append(self._non_service_master_access())
 
         with self._session() as db:
             total_count, success_count, failed_count, conflict_count, unique_account_count = db.execute(
