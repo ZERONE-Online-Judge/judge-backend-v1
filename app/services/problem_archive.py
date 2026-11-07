@@ -114,7 +114,7 @@ class ArchiveAsset(ArchiveModel):
     @field_validator('category')
     @classmethod
     def category_allowed(cls, value):
-        if value != 'assets' and value not in {f'package-files/{r}' for r in PACKAGE_ROLES} and value not in {f'verification-solutions/{k}' for k in VERIFICATION_KINDS}:
+        if value not in {'assets', 'editorial-assets'} and value not in {f'package-files/{r}' for r in PACKAGE_ROLES} and value not in {f'verification-solutions/{k}' for k in VERIFICATION_KINDS}:
             raise ValueError('Unknown asset category')
         return value
 
@@ -143,6 +143,8 @@ class Manifest(ArchiveModel):
 
 
 def _category(key: str) -> str:
+    if '/editorial-assets/' in key:
+        return 'editorial-assets'
     for category in [*(f'package-files/{r}' for r in PACKAGE_ROLES), *(f'verification-solutions/{k}' for k in VERIFICATION_KINDS)]:
         if f'/{category}/' in key:
             return category
