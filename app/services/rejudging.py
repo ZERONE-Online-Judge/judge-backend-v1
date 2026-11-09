@@ -16,6 +16,7 @@ from app.orm_models import (
     VerificationRunRow, VerificationTrialRow,
 )
 from app.services.errors import AppError
+from app.services.judging_inputs import require_active_testcases
 from app.services.storage import object_storage
 
 RESULT_FIELDS = (
@@ -136,8 +137,7 @@ def _create(store, cid, *, submission_id=None, problem_id=None, team_id=None, la
         context, problem, active, cases = context_snapshot(db, problem_id)
         if problem.contest_id != cid:
             raise AppError(404, "not_found", "문제를 찾을 수 없습니다.")
-        if not active or not cases:
-            conflict("활성 테스트케이스를 등록한 뒤 재채점해 주세요.")
+        require_active_testcases(db, problem_id)
         context["bundle_storage_key"] = store._judge_bundle_key(cid, problem, active.testcase_set_id,
             cases, [SimpleNamespace(**asset) for asset in context["package_files"]])
         filters = [SubmissionRow.contest_id == cid, SubmissionRow.problem_id == problem_id]

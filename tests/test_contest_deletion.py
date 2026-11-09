@@ -10,6 +10,7 @@ from app.main import app
 from app.models import ContestStatus, now_utc
 from app.orm_models import ContestRow, JudgeJobRow, MailQueueItemRow, OperationalAuditLogRow, ParticipantTeamRow, ProblemRow, TeamSessionRow
 from app.services.store import store
+from tests.judging_fixtures import ensure_judging_inputs
 
 client = TestClient(app)
 
@@ -123,6 +124,7 @@ def test_running_contest_and_outstanding_judging_are_protected(contest):
         end_at=now + timedelta(hours=1), freeze_at=now + timedelta(minutes=30))
     response = remove(contest, headers)
     assert response.status_code == 409 and response.json()['error']['code'] == 'contest_running'
+    ensure_judging_inputs(problem.problem_id)
     store.create_submission(cid, problem.problem_id, participant, 'cpp17', 'int main(){}')
     store.update_contest_settings(cid, status=ContestStatus.ENDED)
     response = remove(contest, headers)

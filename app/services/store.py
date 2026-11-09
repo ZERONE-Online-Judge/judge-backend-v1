@@ -16,7 +16,8 @@ from sqlalchemy.orm import Session, joinedload, load_only, object_session, selec
 from app.database import SessionLocal, create_schema
 from app.services.request_sessions import after_commit, borrowed_session, current_session
 from app.services.contest_visibility import contest_is_public, contest_hidden_by_status, normalize_private_resources
-from app.services.errors import AppError, permission_denied
+from app.services.errors import AppError, TestcaseResultsInvalid, permission_denied
+from app.services.judging_inputs import require_active_testcases, TEST_BASED_KINDS, QUEUED_TESTCASES_NOT_READY
 from app.settings import settings
 from app.problem_languages import validate_statement_fields
 from app.judge_languages import DEFAULT_LANGUAGES, LANGUAGES, NEW_LANGUAGES, RUNTIME_CAPABILITY, require_allowed, validate_languages
@@ -4160,6 +4161,7 @@ class DbStore:
             team = db.get(ParticipantTeamRow, member.participant_team_id)
             if not team or team.division_id != problem.division_id:
                 raise ValueError("division mismatch")
+            require_active_testcases(db, problem_id)
             submission = SubmissionRow(
                 contest_id=contest_id,
                 division_id=team.division_id,
@@ -4210,6 +4212,8 @@ class DbStore:
                 job.status in {"pending", "running"} for job in jobs
             ):
                 raise AppError(409, "rejudge_not_available", "채점이 종료된 시스템 에러 제출만 재채점할 수 있습니다.")
+            if submission.submission_kind in TEST_BASED_KINDS:
+                require_active_testcases(db, submission.problem_id)
             previous = {key: getattr(submission, key) for key in (
                 "status", "compile_message", "judge_message", "failed_testcase_order",
                 "runtime_ms", "memory_kb", "status_updated_at",
@@ -4255,6 +4259,7 @@ class DbStore:
             problem = db.get(ProblemRow, problem_id)
             if not problem or problem.contest_id != contest_id:
                 raise ValueError("problem not found")
+            require_active_testcases(db, problem_id)
             submission = SubmissionRow(
                 contest_id=contest_id,
                 division_id=problem.division_id,
@@ -4293,6 +4298,7 @@ class DbStore:
             problem = db.get(ProblemRow, problem_id)
             if not problem or problem.contest_id != contest_id:
                 raise ValueError("problem not found")
+            require_active_testcases(db, problem_id)
             require_allowed(problem, language)
             submission = SubmissionRow(
                 contest_id=contest_id,
@@ -5529,6 +5535,24 @@ class DbStore:
             db.refresh(row)
             return _node(row)
 
+    def _finish_unready_judge_job(self, db, job, submission, rejudging_item=None):
+        """Finish an unusable queued job without poisoning the dispatch queue."""
+        if rejudging_item:
+            rejudging.record_result(rejudging_item, SubmissionStatus.SYSTEM_ERROR,
+                None, QUEUED_TESTCASES_NOT_READY, None, None, None)
+        else:
+            submission.status = SubmissionStatus.SYSTEM_ERROR.value
+            submission.status_updated_at = now_utc()
+            submission.compile_message = None
+            submission.judge_message = QUEUED_TESTCASES_NOT_READY
+            submission.failed_testcase_order = None
+            submission.runtime_ms = submission.memory_kb = None
+            submission.progress_current = submission.progress_total = 0
+            from app.services.verification_execution import requeue
+            requeue(db, submission.submission_id)
+        job.status = JudgeJobStatus.FAILED.value
+        job.assigned_node_id = job.lease_token = job.leased_at = None
+
     def claim_jobs(self, node_id: str, node_secret: str, max_count: int) -> list[dict] | None:
         with self._session() as db:
             node = db.scalar(select(JudgeNodeRow).where(JudgeNodeRow.judge_node_id == node_id).with_for_update())
@@ -5552,139 +5576,153 @@ class DbStore:
             from app.services import verification_execution
             full_verification = select(VerificationExecutionRow.submission_id).where(
                 VerificationExecutionRow.submission_id == JudgeJobRow.submission_id).exists()
-            rows = db.scalars(
-                select(JudgeJobRow)
-                .join(SubmissionRow, SubmissionRow.submission_id == JudgeJobRow.submission_id)
-                .where(JudgeJobRow.status == JudgeJobStatus.PENDING.value)
-                .where(~full_verification if verification_execution.CAPABILITY not in (node.execution_capabilities or []) else True)
-                .where(SubmissionRow.language.in_(LANGUAGES if RUNTIME_CAPABILITY in (node.execution_capabilities or []) else [lang for lang in LANGUAGES if lang not in NEW_LANGUAGES]))
-                .order_by(sql_case((is_ai_trial, 2), (rejudging.is_job(), 1), else_=0), JudgeJobRow.queue_position)
-                .limit(safe_max_count)
-                .with_for_update(skip_locked=True)
-            ).all()
-            for row in rows:
-                row.status = JudgeJobStatus.RUNNING.value
-                row.assigned_node_id = node_id
-                row.lease_token = new_id()
-                row.leased_at = now_utc()
-                submission = db.get(SubmissionRow, row.submission_id)
-                if submission:
-                    rejudging_item = rejudging.item_for_job(db, row.judge_job_id)
-                    if rejudging_item:
-                        jobs.append(rejudging.claim_payload(db, row, submission, rejudging_item))
-                        continue
-                    # Avoid mixing package versions or waiting for a parent
-                    # lock while holding submission/job locks.
-                    problem = db.scalar(select(ProblemRow).where(
-                        ProblemRow.problem_id == submission.problem_id).with_for_update(skip_locked=True))
-                    if problem is None and db.get(ProblemRow, submission.problem_id) is not None:
-                        row.status = JudgeJobStatus.PENDING.value
-                        row.assigned_node_id = row.lease_token = row.leased_at = None
-                        continue
-                    active_set = db.scalar(
-                        select(TestcaseSetRow).where(TestcaseSetRow.problem_id == submission.problem_id, TestcaseSetRow.is_active.is_(True))
-                    )
-                    testcase_rows: list[TestcaseRow] = []
-                    if active_set:
-                        testcase_rows = db.scalars(
-                            select(TestcaseRow)
-                            .where(TestcaseRow.testcase_set_id == active_set.testcase_set_id)
-                            .order_by(TestcaseRow.display_order)
-                        ).all()
-                    package_assets: list[ProblemAssetRow] = []
-                    from app.services.verification_agent_tools import prepare_claim
-                    testcase_rows, trial_subset, trial_valid = prepare_claim(db, submission, row, problem, testcase_rows)
-                    if not trial_valid:
-                        continue
-                    package_role_assets: list[tuple[str, ProblemAssetRow]] = []
-                    if problem:
-                        package_assets = db.scalars(
-                            select(ProblemAssetRow)
-                            .where(ProblemAssetRow.problem_id == problem.problem_id, ProblemAssetRow.storage_key.contains("/package-files/"))
-                            .order_by(ProblemAssetRow.created_at)
-                        ).all()
-                        for asset in package_assets:
-                            if is_editor_source_asset(asset):
+            scanned_ids = set()
+            while len(jobs) < safe_max_count:
+                db.flush()
+                rows = db.scalars(
+                    select(JudgeJobRow)
+                    .join(SubmissionRow, SubmissionRow.submission_id == JudgeJobRow.submission_id)
+                    .where(JudgeJobRow.status == JudgeJobStatus.PENDING.value)
+                    .where(JudgeJobRow.judge_job_id.not_in(scanned_ids))
+                    .where(~full_verification if verification_execution.CAPABILITY not in (node.execution_capabilities or []) else True)
+                    .where(SubmissionRow.language.in_(LANGUAGES if RUNTIME_CAPABILITY in (node.execution_capabilities or []) else [lang for lang in LANGUAGES if lang not in NEW_LANGUAGES]))
+                    .order_by(sql_case((is_ai_trial, 2), (rejudging.is_job(), 1), else_=0), JudgeJobRow.queue_position)
+                    .limit(safe_max_count - len(jobs))
+                    .with_for_update(skip_locked=True)
+                ).all()
+                if not rows:
+                    break
+                for row in rows:
+                    scanned_ids.add(row.judge_job_id)
+                    row.status = JudgeJobStatus.RUNNING.value
+                    row.assigned_node_id = node_id
+                    row.lease_token = new_id()
+                    row.leased_at = now_utc()
+                    submission = db.get(SubmissionRow, row.submission_id)
+                    if submission:
+                        rejudging_item = rejudging.item_for_job(db, row.judge_job_id)
+                        if rejudging_item:
+                            payload = rejudging.claim_payload(db, row, submission, rejudging_item)
+                            if not payload.get("testcases"):
+                                self._finish_unready_judge_job(db, row, submission, rejudging_item)
                                 continue
-                            role = None
-                            for candidate in ("package-resource", "checker", "validator"):
-                                if f"/package-files/{candidate}/" in asset.storage_key:
-                                    role = candidate
-                                    break
-                            if role:
-                                package_role_assets.append((role, asset))
-                    bundle_url = None
-                    bundle_available = False
-                    if problem and active_set and not trial_subset:
-                        bundle_key = self._judge_bundle_key(
-                            submission.contest_id,
-                            problem,
-                            active_set.testcase_set_id,
-                            testcase_rows,
-                            package_assets,
+                            jobs.append(payload)
+                            continue
+                        # Avoid mixing package versions or waiting for a parent
+                        # lock while holding submission/job locks.
+                        problem = db.scalar(select(ProblemRow).where(
+                            ProblemRow.problem_id == submission.problem_id).with_for_update(skip_locked=True))
+                        if problem is None and db.get(ProblemRow, submission.problem_id) is not None:
+                            row.status = JudgeJobStatus.PENDING.value
+                            row.assigned_node_id = row.lease_token = row.leased_at = None
+                            continue
+                        active_set = db.scalar(
+                            select(TestcaseSetRow).where(TestcaseSetRow.problem_id == submission.problem_id, TestcaseSetRow.is_active.is_(True))
                         )
-                        bundle_available = object_storage.size_bytes(bundle_key) is not None
-                        if bundle_available:
-                            bundle_url = object_storage.internal_presigned_get_url(bundle_key)
-                    testcases = []
-                    if active_set:
-                        for case in testcase_rows:
-                            item = _testcase(case).model_dump(mode="json")
-                            item["input_url"] = object_storage.internal_presigned_get_url(case.input_storage_key)
-                            item["output_url"] = object_storage.internal_presigned_get_url(case.output_storage_key)
-                            if not bundle_available:
-                                input_text = None
-                                output_text = None
-                                inline_limit = max(0, settings.judge_claim_inline_testcase_max_bytes)
-                                try:
-                                    if inline_limit > 0:
-                                        input_bytes = object_storage.read_bytes(case.input_storage_key)
-                                        output_bytes = object_storage.read_bytes(case.output_storage_key)
-                                        if len(input_bytes) <= inline_limit and len(output_bytes) <= inline_limit:
-                                            input_text = input_bytes.decode("utf-8-sig")
-                                            output_text = output_bytes.decode("utf-8-sig")
-                                except Exception:
+                        testcase_rows: list[TestcaseRow] = []
+                        if active_set:
+                            testcase_rows = db.scalars(
+                                select(TestcaseRow)
+                                .where(TestcaseRow.testcase_set_id == active_set.testcase_set_id)
+                                .order_by(TestcaseRow.display_order)
+                            ).all()
+                        package_assets: list[ProblemAssetRow] = []
+                        from app.services.verification_agent_tools import prepare_claim
+                        testcase_rows, trial_subset, trial_valid = prepare_claim(db, submission, row, problem, testcase_rows)
+                        if not trial_valid:
+                            continue
+                        if submission.submission_kind in TEST_BASED_KINDS and not testcase_rows:
+                            self._finish_unready_judge_job(db, row, submission)
+                            continue
+                        package_role_assets: list[tuple[str, ProblemAssetRow]] = []
+                        if problem:
+                            package_assets = db.scalars(
+                                select(ProblemAssetRow)
+                                .where(ProblemAssetRow.problem_id == problem.problem_id, ProblemAssetRow.storage_key.contains("/package-files/"))
+                                .order_by(ProblemAssetRow.created_at)
+                            ).all()
+                            for asset in package_assets:
+                                if is_editor_source_asset(asset):
+                                    continue
+                                role = None
+                                for candidate in ("package-resource", "checker", "validator"):
+                                    if f"/package-files/{candidate}/" in asset.storage_key:
+                                        role = candidate
+                                        break
+                                if role:
+                                    package_role_assets.append((role, asset))
+                        bundle_url = None
+                        bundle_available = False
+                        if problem and active_set and not trial_subset:
+                            bundle_key = self._judge_bundle_key(
+                                submission.contest_id,
+                                problem,
+                                active_set.testcase_set_id,
+                                testcase_rows,
+                                package_assets,
+                            )
+                            bundle_available = object_storage.size_bytes(bundle_key) is not None
+                            if bundle_available:
+                                bundle_url = object_storage.internal_presigned_get_url(bundle_key)
+                        testcases = []
+                        if active_set:
+                            for case in testcase_rows:
+                                item = _testcase(case).model_dump(mode="json")
+                                item["input_url"] = object_storage.internal_presigned_get_url(case.input_storage_key)
+                                item["output_url"] = object_storage.internal_presigned_get_url(case.output_storage_key)
+                                if not bundle_available:
                                     input_text = None
                                     output_text = None
-                                if input_text is not None and output_text is not None:
-                                    item["input_text"] = input_text
-                                    item["output_text"] = output_text
-                            testcases.append(item)
-                    if submission.submission_kind == "verification_trial":
-                        from app.services.verification_agent_tools import probe_payload
-                        testcases = probe_payload(db, submission.submission_id) or testcases
-                    package_files = [
-                        {
-                            **_asset(asset).model_dump(mode="json"),
-                            "role": role,
-                            "url": object_storage.internal_presigned_get_url(asset.storage_key),
-                        }
-                        for role, asset in package_role_assets
-                    ]
-                    if submission.submission_kind == "operator_test":
-                        from app.services.verification_ai import snapshot_claim
-                        snapshot_claim(db, submission, problem, active_set, testcase_rows)
-                    collect_all = verification_execution.claim(db, submission, node, row, active_set, testcase_rows) if submission.submission_kind == "operator_test" else False
-                    submission.status = SubmissionStatus.PREPARING.value
-                    submission.status_updated_at = now_utc()
-                    submission.compile_message = None
-                    submission.judge_message = None
-                    submission.failed_testcase_order = None
-                    submission.progress_current = 0 if testcases else None
-                    submission.progress_total = len(testcases) if testcases else None
-                    jobs.append(
-                        {
-                            **_job(row).model_dump(mode="json"),
-                            "lease_token": row.lease_token,
-                            "submission": _submission(submission).model_dump(mode="json"),
-                            "problem": _problem(problem).model_dump(mode="json") if problem else None,
-                            "testcase_set": _testcase_set(active_set).model_dump(mode="json") if active_set else None,
-                            "testcases": testcases,
-                            "package_files": package_files,
-                            "bundle_url": bundle_url,
-                            **({"collect_all_results": True} if collect_all else {}),
-                        }
-                    )
+                                    inline_limit = max(0, settings.judge_claim_inline_testcase_max_bytes)
+                                    try:
+                                        if inline_limit > 0:
+                                            input_bytes = object_storage.read_bytes(case.input_storage_key)
+                                            output_bytes = object_storage.read_bytes(case.output_storage_key)
+                                            if len(input_bytes) <= inline_limit and len(output_bytes) <= inline_limit:
+                                                input_text = input_bytes.decode("utf-8-sig")
+                                                output_text = output_bytes.decode("utf-8-sig")
+                                    except Exception:
+                                        input_text = None
+                                        output_text = None
+                                    if input_text is not None and output_text is not None:
+                                        item["input_text"] = input_text
+                                        item["output_text"] = output_text
+                                testcases.append(item)
+                        if submission.submission_kind == "verification_trial":
+                            from app.services.verification_agent_tools import probe_payload
+                            testcases = probe_payload(db, submission.submission_id) or testcases
+                        package_files = [
+                            {
+                                **_asset(asset).model_dump(mode="json"),
+                                "role": role,
+                                "url": object_storage.internal_presigned_get_url(asset.storage_key),
+                            }
+                            for role, asset in package_role_assets
+                        ]
+                        if submission.submission_kind == "operator_test":
+                            from app.services.verification_ai import snapshot_claim
+                            snapshot_claim(db, submission, problem, active_set, testcase_rows)
+                        collect_all = verification_execution.claim(db, submission, node, row, active_set, testcase_rows) if submission.submission_kind == "operator_test" else False
+                        submission.status = SubmissionStatus.PREPARING.value
+                        submission.status_updated_at = now_utc()
+                        submission.compile_message = None
+                        submission.judge_message = None
+                        submission.failed_testcase_order = None
+                        submission.progress_current = 0 if testcases else None
+                        submission.progress_total = len(testcases) if testcases else None
+                        jobs.append(
+                            {
+                                **_job(row).model_dump(mode="json"),
+                                "lease_token": row.lease_token,
+                                "submission": _submission(submission).model_dump(mode="json"),
+                                "problem": _problem(problem).model_dump(mode="json") if problem else None,
+                                "testcase_set": _testcase_set(active_set).model_dump(mode="json") if active_set else None,
+                                "testcases": testcases,
+                                "package_files": package_files,
+                                "bundle_url": bundle_url,
+                                **({"collect_all_results": True} if collect_all else {}),
+                            }
+                        )
             db.commit()
             return jobs
 
@@ -6006,11 +6044,11 @@ class DbStore:
             execution = db.get(verification_execution.Execution, submission.submission_id)
             if execution:
                 if progress_total not in {None, len(execution.testcases)} or (testcase_result is not None and testcase_results is not None):
-                    raise ValueError("lease mismatch: invalid verification progress")
+                    raise TestcaseResultsInvalid("invalid_progress")
                 verification_execution.merge(execution, [testcase_result] if testcase_result is not None else (testcase_results or []))
                 progress_current, progress_total = len(execution.results), len(execution.testcases)
             elif testcase_result is not None or testcase_results is not None:
-                raise ValueError("lease mismatch: unrequested testcase results")
+                raise TestcaseResultsInvalid("unrequested_results")
             submission.status = status.value
             submission.progress_total = max(progress_total, 0) if progress_total is not None else None
             if progress_current is None:
@@ -6091,7 +6129,7 @@ class DbStore:
                 runtime_ms, memory_kb = metrics["runtime_ms"], metrics["memory_kb"]
                 submission.progress_current, submission.progress_total = len(execution.results), len(execution.testcases)
             elif testcase_results is not None:
-                raise ValueError("lease mismatch: unrequested testcase results")
+                raise TestcaseResultsInvalid("unrequested_results")
             submission.status = final_status.value
             submission.compile_message = compile_message
             submission.judge_message = judge_message

@@ -17,6 +17,7 @@ from app.orm_models import StaffAccountRow, SubmissionRow
 from app.services.contest_roles import ROLE_PERMISSIONS, roles_for_scopes
 from app.services.store import store
 from app.services.storage import object_storage
+from tests.judging_fixtures import ensure_judging_inputs
 
 client = TestClient(app)
 
@@ -33,6 +34,7 @@ def context():
     cid = contest.contest_id
     division = store.create_contest_division(cid, "general", "General")
     problem = store.create_problem(cid, division.division_id, "A", "Review me", "Statement", 1000, 128, {}, 1)
+    ensure_judging_inputs(problem.problem_id)
     store.update_problem(cid, problem.problem_id, editorial="PRIVATE EDITORIAL")
     tokens = {}
     accounts = {}

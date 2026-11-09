@@ -17,6 +17,7 @@ from app.orm_models import (
     GeneralSessionRow, MailQueueItemRow, OtpCodeRow, StaffAccountRow, TeamMemberRow,
 )
 from app.services.store import store
+from tests.judging_fixtures import ensure_judging_inputs
 
 client = TestClient(app)
 
@@ -42,6 +43,7 @@ def context():
     store.upsert_contest_operator(cid, f"owner-{uuid4().hex}@zoj.com", "Owner", ["master"])
     division = store.create_contest_division(cid, "A", "A")
     problem = store.create_problem(cid, division.division_id, "A", "Problem", "Statement", 1000, 128, {}, 1)
+    ensure_judging_inputs(problem.problem_id)
     actor = store.upsert_contest_operator(cid, fresh_email("actor"), "Manager", ["staff_manager"])
     target = store.upsert_contest_operator(cid, fresh_email("target"), "Original name", ["problem_reviewer"])
     return {"cid": cid, "division": division, "problem": problem, "actor": actor, "target": target, "actor_session": login(str(actor.email)), "target_session": login(str(target.email)), "base": f"/api/operator/contests/{cid}"}

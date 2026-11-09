@@ -10,7 +10,7 @@ import pytest
 from sqlalchemy import select, func
 from test_editor_judging import database, short_lock_timeout, headers, client, EMAIL, SECRET, node, snapshot, submit, claim
 from app.models import now_utc
-from app.orm_models import EditorExecutionTaskRow as Task, JudgeNodeRow, JudgeJobRow, SubmissionRow, ContestRow, ContestDivisionRow, ProblemRow
+from app.orm_models import EditorExecutionTaskRow as Task, JudgeNodeRow, JudgeJobRow, SubmissionRow, ContestRow, ContestDivisionRow, ProblemRow, TestcaseRow as CaseRow, TestcaseSetRow as CaseSetRow
 from app.services import editor_execution as execution
 from app.services.editor_protocol import FORMAT, PROTOCOL, KINDS, pack, validate_result
 from app.services.store import store
@@ -141,6 +141,10 @@ def test_queue_origin_is_enforced_for_all_editor_work(execution_db, allow_zoj, a
         db.flush()
         db.add(ProblemRow(problem_id='problem',contest_id='contest',division_id='division',problem_code='A',title='Test',statement='',time_limit_ms=1000,memory_limit_mb=128,display_order=1))
         db.flush()
+        db.add(CaseSetRow(testcase_set_id='contest-set',problem_id='problem',version=1,is_active=True))
+        db.flush()
+        db.add(CaseRow(testcase_set_id='contest-set',display_order=1,input_storage_key='input',
+            output_storage_key='output',input_sha256='a'*64,output_sha256='b'*64))
         db.add(SubmissionRow(submission_id='ordinary' , contest_id='contest', division_id='division', problem_id='problem', language='cpp17', source_code='int main(){}', status='waiting'))
         db.flush()
         db.add(JudgeJobRow(judge_job_id='ordinary-job', submission_id='ordinary', contest_id='contest', division_id='division', status='pending', queue_position=1))

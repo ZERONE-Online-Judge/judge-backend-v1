@@ -4,7 +4,7 @@ import hashlib
 
 from app.orm_models import VerificationExecutionRow as Execution
 from app.services import editor_judging
-from app.services.errors import not_found
+from app.services.errors import not_found, TestcaseResultsInvalid
 from app.services.storage import object_storage
 
 CAPABILITY = "zoj-judge-full-v1"
@@ -55,10 +55,13 @@ def merge(row, values, terminal=None):
     previous = {case["index"]: case for case in row.results}
     merged, incoming, writes = dict(previous), set(), {}
     for item in values:
-        value = editor_judging.CaseResult.model_validate(item).model_dump()
+        try:
+            value = editor_judging.CaseResult.model_validate(item).model_dump()
+        except ValueError as error:
+            raise TestcaseResultsInvalid("invalid_format") from error
         index = value["index"]
         if index not in expected or index in incoming:
-            raise ValueError("lease mismatch: invalid testcase result")
+            raise TestcaseResultsInvalid("invalid_testcase")
         incoming.add(index)
         encoded = value.pop("output_base64")
         value["output_available"] = encoded is not None
@@ -66,36 +69,37 @@ def merge(row, values, terminal=None):
             try:
                 content = base64.b64decode(encoded, validate=True)
             except ValueError as error:
-                raise ValueError("lease mismatch: invalid output encoding") from error
+                raise TestcaseResultsInvalid("invalid_output_encoding") from error
             original = value["output_total_bytes"]
             if len(content) > editor_judging.MAX_CASE_OUTPUT_BYTES or original is None or original < len(content) or value["output_truncated"] != (len(content) < original):
-                raise ValueError("lease mismatch: invalid output size")
+                raise TestcaseResultsInvalid("invalid_output_size")
             sha = hashlib.sha256(content).hexdigest()
             value.update(output_size=len(content), output_sha256=sha)
             key = output_key(row, index, sha)
             if key not in row.storage_keys:
                 writes[key] = content
         if index in previous and previous[index] != value:
-            raise ValueError("lease mismatch: testcase result changed")
+            raise TestcaseResultsInvalid("testcase_changed")
         merged[index] = value
     if sum(case.get("output_size", 0) for case in merged.values()) > editor_judging.MAX_RUN_OUTPUT_BYTES:
-        raise ValueError("lease mismatch: output budget exceeded")
+        raise TestcaseResultsInvalid("output_budget_exceeded")
     complete = bool(expected) and set(merged) == expected
     if terminal is not None:
         status, failed = terminal
         if failed is not None and failed not in expected:
-            raise ValueError("lease mismatch: unknown failed testcase")
+            raise TestcaseResultsInvalid("unknown_failed_testcase")
         if not complete and status not in {"compile_error", "system_error"}:
-            raise ValueError("lease mismatch: incomplete full-suite result")
-        if complete:
+            raise TestcaseResultsInvalid("incomplete_suite")
+        if complete and status != "system_error":
             first = next((case for _, case in sorted(merged.items()) if case["final_status"] != "accepted"), None)
             if status != (first["final_status"] if first else "accepted") or failed != (first["index"] if first else None):
-                raise ValueError("lease mismatch: aggregate differs from testcase results")
+                raise TestcaseResultsInvalid("aggregate_mismatch")
     for key, content in writes.items():
         object_storage.write_bytes(key, content, "application/octet-stream")
     row.storage_keys = list(dict.fromkeys([*row.storage_keys, *writes]))
     row.results = [value for _, value in sorted(merged.items())]
-    row.full_suite_complete = complete if terminal is not None else False
+    row.full_suite_complete = bool(terminal is not None and complete
+        and terminal[0] not in {"compile_error", "system_error"})
     refresh_summary(row)
     return len(row.results)
 

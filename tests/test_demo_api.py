@@ -17,9 +17,17 @@ from app.models import ContestStatus, JudgeJobStatus, SubmissionStatus
 from app.orm_models import JudgeJobRow, SubmissionRow
 from app.services.store import store
 from app.services.storage import object_storage
+from tests.judging_fixtures import ensure_judging_inputs
 
 
 client = TestClient(app)
+
+
+@pytest.fixture(scope='module', autouse=True)
+def ready_demo_judging_inputs():
+    # Seeded successful judging fixtures need real active input.
+    for problem in store.problems.values():
+        ensure_judging_inputs(problem.problem_id)
 
 
 def patch_with_change_notice(path, **kwargs):
@@ -3259,6 +3267,7 @@ def test_participant_public_submission_list_includes_each_team_name_after_end():
     )
     assert problem.status_code == 200
     problem_id = problem.json()["data"]["problem_id"]
+    ensure_judging_inputs(problem_id)
 
     other_team_name = f"Other Submit Team {suffix}"
     other_email = f"other-submit-{suffix}@zoj.com"
@@ -3334,6 +3343,7 @@ def test_problem_solve_status_uses_live_participant_results_during_scoreboard_fr
     )
     assert problem.status_code == 200
     problem_id = problem.json()["data"]["problem_id"]
+    ensure_judging_inputs(problem_id)
     set_contest_running(contest_id)
 
     wrong_submission = client.post(
@@ -3448,6 +3458,7 @@ def test_scoreboard_uses_icpc_attempt_policy_per_problem():
             "display_order": 120,
         },
     ).json()["data"]
+    ensure_judging_inputs(problem["problem_id"])
     set_contest_running(contest_id)
 
     submissions = []
@@ -3537,6 +3548,7 @@ def test_scoreboard_ties_zero_solve_and_orders_wrong_only_below_no_submit():
     )
     assert problem.status_code == 200
     problem_id = problem.json()["data"]["problem_id"]
+    ensure_judging_inputs(problem_id)
 
     teams = []
     for label in ["No Submit A", "No Submit B", "Wrong Only"]:
@@ -3617,6 +3629,7 @@ def test_manual_rejudge_api_is_not_available_to_service_master_or_operator():
             "display_order": 130,
         },
     ).json()["data"]
+    ensure_judging_inputs(problem["problem_id"])
     set_contest_running(contest_id)
     submission = client.post(
         f"/api/contests/{contest_id}/problems/{problem['problem_id']}/submissions",

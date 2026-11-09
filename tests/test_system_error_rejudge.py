@@ -4,10 +4,22 @@ import pytest
 from sqlalchemy import select, func
 
 from app.models import SubmissionStatus
-from app.orm_models import JudgeJobRow, SubmissionRow
+from app.orm_models import JudgeJobRow, SubmissionRow, ProblemRow, TestcaseRow as CaseRow, TestcaseSetRow as CaseSetRow
 from app.services.errors import AppError
 from app.services.store import store
 from tests.test_judge_security import database, leased, client, SECRET
+
+
+@pytest.fixture(autouse=True)
+def ready_problem(database):
+    # A retry is test-based, so the fixture needs actual active judging input.
+    with database() as db:
+        db.add(ProblemRow(problem_id='problem', contest_id='contest', division_id='division',
+            problem_code='A', title='A', statement='', time_limit_ms=1000, memory_limit_mb=128, display_order=1))
+        db.add(CaseSetRow(testcase_set_id='set',problem_id='problem',version=1,is_active=True))
+        db.add(CaseRow(testcase_id='case',testcase_set_id='set',display_order=1,
+            input_storage_key='input',output_storage_key='output',input_sha256='a'*64,output_sha256='b'*64))
+        db.commit()
 
 
 def fail_job():

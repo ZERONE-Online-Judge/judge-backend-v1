@@ -12,6 +12,7 @@ os.environ.setdefault("ALLOW_EMPTY_OTP", "true")
 from app.main import app
 from app.models import ContestStatus, now_utc
 from app.services.store import store
+from tests.judging_fixtures import ensure_judging_inputs
 from app.services.contest_roles import title_for_roles, title_for_scopes
 
 client = TestClient(app)
@@ -41,6 +42,7 @@ def workspace():
     cid = contest.contest_id
     division = store.create_contest_division(cid, "general", "General")
     problem = store.create_problem(cid, division.division_id, "A", "Test", "Statement", 1000, 128, {}, 1)
+    ensure_judging_inputs(problem.problem_id)
     master_email = f"titles-master-{uuid4().hex}@zoj.com"
     store.upsert_contest_operator(cid, master_email, "관리자", ["master"])
     member_email = f"titles-participant-{uuid4().hex}@zoj.com"

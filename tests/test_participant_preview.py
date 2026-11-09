@@ -15,6 +15,7 @@ from app.models import ContestStatus, ContestResourceAccess, now_utc
 from app.orm_models import GeneralSessionRow, ParticipantTeamRow, TeamMemberRow, SubmissionRow
 from app.services.store import store
 from app.services.storage import object_storage
+from tests.judging_fixtures import ensure_judging_inputs
 
 client = TestClient(app)
 
@@ -38,6 +39,7 @@ def preview():
     problems = [store.create_problem(cid, division.division_id, "A", "Preview problem", "Visible statement", 1000, 128, {}, 1) for division in divisions]
     for problem in problems:
         store.update_problem(cid, problem.problem_id, editorial="PRIVATE EDITORIAL")
+        ensure_judging_inputs(problem.problem_id)
     accounts = [store.upsert_contest_operator(cid, f"preview-{uuid4().hex}@zoj.com", "Preview User", ["participant_preview"]) for _ in range(2)]
     sessions = [general_login(str(account.email)) for account in accounts]
     real_email = f"real-{uuid4().hex}@zoj.com"

@@ -85,7 +85,7 @@ def test_unsupported_nodes_cannot_claim_full_runs_and_contest_path_stays_fail_fa
     plain = store.create_operator_test_submission(c['cid'], c['pid'], 'cpp17', 'int main(){}')
     job = store.claim_jobs(c['node'].judge_node_id, SECRET, 2)[0]
     assert job['submission']['submission_id'] == plain.submission_id and not job.get('collect_all_results')
-    assert finish(job, [case(1)], 'accepted', None).status_code == 409
+    assert finish(job, [case(1)], 'accepted', None).status_code == 422
     result = store.report_judge_result(job['judge_job_id'], SECRET, job['lease_token'], Status.WRONG_ANSWER, None, None, 1)
     assert result[0].status == Status.WRONG_ANSWER
     assert store.get_submission(sid).status == Status.WAITING
@@ -104,7 +104,9 @@ def test_invalid_full_suite_results_are_rejected_without_persisting(context, mut
     if mutation == 'wrong_size': values[1]['output_total_bytes'] = 1
     if mutation == 'wrong_aggregate': status, failed = 'accepted', None
     response = finish(job, values, status, failed)
-    assert response.status_code == 409, response.text
+    assert response.status_code == 422, response.text
+    assert response.json()['error']['code'] == 'testcase_results_invalid'
+    assert response.json()['error']['details']['reason']
     with c['sessions']() as db:
         assert db.get(Execution,sid).results == []
     assert store.get_submission(sid).status == Status.PREPARING
@@ -114,7 +116,7 @@ def test_changed_results_and_foreign_or_expired_leases_are_rejected(context):
     c = context
     sid, job = setup(c, 2)
     assert progress(job,[case(1)]).status_code == 200
-    assert progress(job,[case(1,'wrong_answer')]).status_code == 409
+    assert progress(job,[case(1,'wrong_answer')]).status_code == 422
     assert progress({**job,'lease_token':'foreign'},[case(2)]).status_code == 409
     with c['sessions']() as db:
         db.get(JudgeJobRow,job['judge_job_id']).leased_at=now_utc()-timedelta(seconds=settings.judge_lease_timeout_seconds+1)

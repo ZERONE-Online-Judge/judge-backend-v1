@@ -118,10 +118,12 @@ def owns_submission(participant: dict, submission) -> bool:
 
 def create_preview_submission(contest_id: str, problem_id: str, participant: dict, language: str, source_code: str):
     from app.services.store import _normalize_source_code, _submission
+    from app.services.judging_inputs import require_active_testcases
     with SessionLocal() as db:
         problem = db.get(ProblemRow, problem_id)
         if not problem or problem.contest_id != contest_id or problem.division_id != participant["division"].division_id:
             raise ValueError("division mismatch")
+        require_active_testcases(db, problem_id)
         submission = SubmissionRow(
             contest_id=contest_id, division_id=problem.division_id, problem_id=problem_id,
             participant_team_id=None, team_member_id=None, submission_kind=PREVIEW_KIND,

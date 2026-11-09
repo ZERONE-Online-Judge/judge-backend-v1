@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 from contextlib import asynccontextmanager
 import anyio.to_thread
@@ -25,6 +26,14 @@ from app.services.store import store
 from app.settings import settings
 from app.services.request_capacity import RequestCapacityMiddleware, busy_payload
 from sqlalchemy.exc import DBAPIError, TimeoutError as DatabasePoolTimeout
+
+logger = logging.getLogger(__name__)
+JUDGING_DIAGNOSTIC_REASONS = frozenset({
+    "invalid_format", "invalid_testcase", "invalid_output_encoding",
+    "invalid_output_size", "testcase_changed", "output_budget_exceeded",
+    "unknown_failed_testcase", "incomplete_suite", "aggregate_mismatch",
+    "invalid_progress", "unrequested_results",
+})
 
 
 @asynccontextmanager
@@ -82,6 +91,17 @@ async def database_statement_error(request: Request, exc: DBAPIError):
 
 @app.exception_handler(AppError)
 async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
+    if exc.code in {"testcases_not_ready", "testcase_results_invalid"}:
+        # This diagnostic is deliberately narrower than the response: never
+        # record request bodies, source/output, credentials or exception text.
+        reason = "no_active_testcases" if exc.code == "testcases_not_ready" else exc.details.get("reason")
+        if not isinstance(reason, str) or (reason not in JUDGING_DIAGNOSTIC_REASONS and reason != "no_active_testcases"):
+            reason = "invalid_evidence"
+        request_id = request.state.request_id
+        if not isinstance(request_id, str) or re.fullmatch(r"req_[0-9a-f]{32}", request_id) is None:
+            request_id = "unavailable"
+        logger.warning("judging_request_rejected code=%s reason=%s request_id=%s",
+            exc.code, reason, request_id)
     return JSONResponse(
         status_code=exc.status_code,
         headers={"Retry-After": "1", "Cache-Control": "no-store"} if exc.code == "api_busy" else None,

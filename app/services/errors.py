@@ -12,6 +12,15 @@ class AppError(Exception):
         self.details = details or {}
 
 
+class TestcaseResultsInvalid(AppError):
+    """The lease is valid, but the reported testcase evidence is invalid."""
+
+    def __init__(self, reason: str):
+        super().__init__(422, "testcase_results_invalid",
+            "채점 결과 증거를 확인하지 못했습니다. 관리자에게 문의해 주세요.",
+            {"reason": reason})
+
+
 def not_found(message: str = "Resource not found.") -> AppError:
     return AppError(404, "not_found", message)
 
