@@ -11,8 +11,16 @@ printf '%s  %s\n' "$pypy_sha" /tmp/pypy.tar.bz2 | sha256sum -c -
 mkdir -p /usr/local/lib/pypy
  tar -xjf /tmp/pypy.tar.bz2 -C /usr/local/lib/pypy --strip-components=1
 ln -s /usr/local/lib/pypy/bin/pypy3 /usr/local/bin/pypy3
-# Revalidate the canonical release response; verify the pinned archive below.
-curl -fLS --retry 3 -H 'Cache-Control: no-cache' "https://github.com/JetBrains/kotlin/releases/download/v1.9.24/kotlin-compiler-1.9.24.zip" -o /tmp/kotlin.zip
+# Revalidate the official redirect, then avoid a cached failure on each retry.
+kotlin_url=https://github.com/JetBrains/kotlin/releases/download/v1.9.24/kotlin-compiler-1.9.24.zip
+if ! curl -fLS --retry 3 -H 'Cache-Control: no-cache' "$kotlin_url" -o /tmp/kotlin.zip; then
+  for attempt in 1 2 3; do
+    if curl -fLS --connect-timeout 20 --max-time 180 "$kotlin_url?zoj_download=$(date +%s)-$attempt" -o /tmp/kotlin.zip; then
+      break
+    fi
+    [ "$attempt" -lt 3 ] || exit 1
+  done
+fi
 printf '%s  %s\n' eb7b68e01029fa67bc8d060ee54c12018f2c60ddc438cf21db14517229aa693b /tmp/kotlin.zip | sha256sum -c -
 unzip -q /tmp/kotlin.zip -d /usr/local/lib
 mv /usr/local/lib/kotlinc /usr/local/lib/kotlin
