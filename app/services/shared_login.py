@@ -1,11 +1,11 @@
 """One persisted ZOJ session, shared by the trusted ZOJ and Editor domains."""
 
 import time
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from app.database import SessionLocal
 from app.models import now_utc
-from app.orm_models import GeneralSessionRow, IdentityAccountRow
+from app.orm_models import GeneralSessionRow, IdentityAccountRow, StaffAccountRow
 from app.services.errors import AppError
 from app.services.security import decode_session_token, token_hash
 from app.services.store import _aware, store
@@ -98,10 +98,18 @@ def resolve(token):
                     raise AppError(
                         401, "authentication_required", "계정을 확인할 수 없습니다."
                     )
+        # Resolve the central role on every request so grants and revocations
+        # apply to existing Editor sessions without trusting client claims.
+        is_service_master = db.scalar(
+            select(StaffAccountRow.is_service_master).where(
+                func.lower(StaffAccountRow.email) == account.email.lower()
+            )
+        )
         return {
             "account_id": account.account_id,
             "email": account.email,
             "display_name": account.display_name,
+            "is_service_master": bool(is_service_master),
             "session_id": session.general_session_id,
         }
 

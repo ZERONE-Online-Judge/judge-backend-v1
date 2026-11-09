@@ -11,7 +11,13 @@ from pydantic import SecretStr
 from sqlalchemy import select, func
 from app.main import app
 from app.database import SessionLocal
-from app.orm_models import OtpCodeRow, EditorNonceRow, IdentityAccountRow, AccessLogRow
+from app.orm_models import (
+    OtpCodeRow,
+    EditorNonceRow,
+    IdentityAccountRow,
+    AccessLogRow,
+    StaffAccountRow,
+)
 from app.services import shared_login
 from app.services.store import store
 from app.services.session_events import SessionWatch, session_watch_active
@@ -64,6 +70,7 @@ def test_editor_login_restores_the_same_central_session_and_logout_revokes_both(
     email, result = login(browser)
     token, user = result["session_token"], result["user"]
     assert user["email"] == email and "access_token" not in user
+    assert user["is_service_master"] is False
     browser.cookies.set(shared_login.COOKIE, token, domain="testserver.local", path="/")
     restored = browser.post("/api/auth/general/sso").json()["data"]
     assert restored["account"]["account_id"] == user["account_id"]
@@ -191,3 +198,78 @@ def test_production_common_cookie_is_secure_and_has_one_domain(monkeypatch):
         "Domain=.zoj.kr" in cleared.headers["set-cookie"]
         and "Max-Age=0" in cleared.headers["set-cookie"]
     )
+
+
+def test_editor_identity_uses_current_central_master_role(browser):
+    email, result = login(browser)
+    token = result["session_token"]
+    initial = shared_login.resolve(token)
+    values = {"session_token": token}
+
+    def current_user():
+        response = rpc(browser, "me", values)[0]
+        assert response.status_code == 200, response.text
+        user = response.json()["data"]
+        assert user["account_id"] == initial["account_id"]
+        assert user["email"] == email
+        assert "session_id" not in user
+        assert shared_login.resolve(token)["session_id"] == initial["session_id"]
+        return user
+
+    assert current_user()["is_service_master"] is False
+    with SessionLocal() as db:
+        staff = StaffAccountRow(
+            email=email.upper(),
+            display_name="Contest operator",
+            is_service_master=False,
+            permissions="contest.*",
+        )
+        db.add(staff)
+        db.commit()
+        staff_id = staff.staff_account_id
+    assert current_user()["is_service_master"] is False
+
+    with SessionLocal() as db:
+        db.get(StaffAccountRow, staff_id).is_service_master = True
+        db.commit()
+    assert current_user()["is_service_master"] is True
+    assert (
+        shared_login.editor_result({"refresh_token": token})["user"]["is_service_master"]
+        is True
+    )
+
+    with SessionLocal() as db:
+        db.get(StaffAccountRow, staff_id).is_service_master = False
+        db.commit()
+    assert current_user()["is_service_master"] is False
+
+    with SessionLocal() as db:
+        db.get(StaffAccountRow, staff_id).is_service_master = True
+        db.commit()
+    assert current_user()["is_service_master"] is True
+    with SessionLocal() as db:
+        db.delete(db.get(StaffAccountRow, staff_id))
+        db.commit()
+    assert current_user()["is_service_master"] is False
+
+
+def test_editor_identity_rejects_client_master_claims(browser):
+    email, result = login(browser)
+    master_email = "master-" + uuid4().hex + "@example.com"
+    with SessionLocal() as db:
+        db.add(
+            StaffAccountRow(
+                email=master_email,
+                display_name="Service master",
+                is_service_master=True,
+            )
+        )
+        db.commit()
+    values = {"session_token": result["session_token"], "email": master_email}
+    response = rpc(browser, "me", values)[0]
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["email"] == email
+    assert response.json()["data"]["is_service_master"] is False
+    forged = rpc(browser, "me", {**values, "is_service_master": True})[0]
+    assert forged.status_code == 422
+    assert forged.json()["error"]["code"] == "invalid_auth_request"
