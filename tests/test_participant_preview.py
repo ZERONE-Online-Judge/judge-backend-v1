@@ -13,6 +13,7 @@ os.environ.setdefault("ALLOW_EMPTY_OTP", "true")
 from app.main import app
 from app.models import ContestStatus, ContestResourceAccess, now_utc
 from app.orm_models import GeneralSessionRow, ParticipantTeamRow, TeamMemberRow, SubmissionRow
+from app.settings import settings
 from app.services.store import store
 from app.services.storage import object_storage
 from tests.judging_fixtures import ensure_judging_inputs
@@ -31,7 +32,8 @@ def headers(session):
 
 
 @pytest.fixture
-def preview():
+def preview(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "local_object_storage_root", str(tmp_path / "objects"))
     contest = store.create_contest("Hidden preview", "Test", "Preview testing", start_at=now_utc() + timedelta(days=2), status=ContestStatus.DRAFT)
     cid = contest.contest_id
     store.upsert_contest_operator(cid, f"owner-{uuid4().hex}@zoj.com", "Owner", ["master"])
