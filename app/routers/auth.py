@@ -5,6 +5,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app.settings import settings
 from app.services.access_logging import general_role, write_access_log
+from app.services.client_environment import request_environment
 from app.services.presentation_access import is_presentation_email
 from app.services.errors import AppError
 from app.services.authz import bearer_token, require_staff
@@ -251,6 +252,7 @@ def general_otp_verify(payload: GeneralOtpVerifyRequest, request: Request, respo
             str(payload.email),
             payload.otp_code,
             payload.force_new_session,
+            client_environment=request_environment(request),
         )
     except SessionConflictError as exc:
         write_access_log(
@@ -303,7 +305,8 @@ def general_password_login(payload: GeneralPasswordLoginRequest, request: Reques
     if is_presentation_email(str(payload.email)):
         raise AppError(401, "presentation_login_required", "프레젠테이션 전용 로그인으로 접속해 주세요.")
     try:
-        session = password_auth.login(str(payload.email), payload.password, payload.force_new_session, request.client.host, request.cookies.get(login_security.cookie_name()))
+        session = password_auth.login(str(payload.email), payload.password, payload.force_new_session, request.client.host,
+            request.cookies.get(login_security.cookie_name()), client_environment=request_environment(request))
     except SessionConflictError as exc:
         raise AppError(409,"session_conflict","이미 다른 브라우저 또는 기기에서 로그인 중입니다.",exc.details)
     except AppError as exc:
@@ -484,6 +487,7 @@ def general_participant_session(contest_id: str, request: Request):
         session["account"]["email"],
         contest_id,
         token,
+        client_environment=request_environment(request),
     )
     if not verified:
         raise AppError(403, "scope_denied", "This account is not registered as a participant for the contest.")

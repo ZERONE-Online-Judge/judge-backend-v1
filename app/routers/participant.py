@@ -12,6 +12,7 @@ from app.services.scoreboard_response import scoreboard_response
 
 from app.models import ContestResourceAccess, ContestStatus, SubmissionStatus, now_utc
 from app.services.access_logging import write_access_log
+from app.services.client_environment import request_environment
 from app.services.authz import bearer_token, has_contest_permission, require_participant
 from app.services.contest_visibility import contest_has_ended, contest_payload_for_view
 from app.services.errors import AppError, authentication_required, invalid_state, not_found, permission_denied
@@ -327,6 +328,7 @@ def verify_otp(contest_id: str, payload: OtpVerifyRequest, request: Request):
             str(payload.email),
             payload.otp_code,
             payload.force_new_session,
+            client_environment=request_environment(request),
         )
     except SessionConflictError as exc:
         write_access_log(

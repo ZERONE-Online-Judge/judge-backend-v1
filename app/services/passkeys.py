@@ -340,7 +340,7 @@ def verify_assertion(db, challenge, credential, expected_challenge=None):
     return account, row
 
 
-def authenticate(challenge_id, credential, force_new_session, client_ip):
+def authenticate(challenge_id, credential, force_new_session, client_ip, *, client_environment=None):
     from app.services.store import store, SessionConflictError
 
     consume("passkey-verify-ip", client_ip, 1200, 300)
@@ -385,7 +385,7 @@ def authenticate(challenge_id, credential, force_new_session, client_ip):
             raise SessionConflictError({**conflict, "transfer_token": transfer_token})
         if conflict:
             store._revoke_active_login_sessions_for_email(db, email)
-        return store._issue_general_session(db, email, profile, strongly_verified=True)
+        return store._issue_general_session(db, email, profile, strongly_verified=True, client_environment=client_environment)
 
 
 def active_session_ids(db, email):
@@ -403,7 +403,7 @@ def active_session_ids(db, email):
     )
 
 
-def confirm_login_transfer(email, proof_token, client_ip):
+def confirm_login_transfer(email, proof_token, client_ip, *, client_environment=None):
     """Consume a verified assertion's approval atomically with session issuance."""
     from app.services.store import store
 
@@ -465,7 +465,7 @@ def confirm_login_transfer(email, proof_token, client_ip):
         if not consumed.rowcount:
             raise invalid()
         store._revoke_active_login_sessions_for_email(db, email)
-        return store._issue_general_session(db, email, profile, strongly_verified=True)
+        return store._issue_general_session(db, email, profile, strongly_verified=True, client_environment=client_environment)
 
 
 def remove(token, credential_id):

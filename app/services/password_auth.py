@@ -192,7 +192,7 @@ def confirm_change(
     return {"changed": True, "sessions_revoked": True}
 
 
-def login(email, password, force_new_session, client_ip, device_token=None):
+def login(email, password, force_new_session, client_ip, device_token=None, *, client_environment=None):
     email = email.lower()
     consume("pwd-login-ip", client_ip, 200, 300)
     consume("pwd-login-email", email, 10, 300)
@@ -221,4 +221,4 @@ def login(email, password, force_new_session, client_ip, device_token=None):
             raise SessionConflictError(conflict)
         if conflict:
             store._revoke_active_login_sessions_for_email(db, email)
-        return store._issue_general_session(db, email, profile)
+        return store._issue_general_session(db, email, profile, client_environment=client_environment)

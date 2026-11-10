@@ -475,6 +475,7 @@ class StaffSessionRow(Base):
     refresh_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    client_environment: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class GeneralSessionRow(Base):
@@ -489,6 +490,7 @@ class GeneralSessionRow(Base):
     refresh_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    client_environment: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class ParticipantPreviewSessionRow(Base):
@@ -665,6 +667,7 @@ class TeamSessionRow(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    client_environment: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class PresentationAccountRow(Base):

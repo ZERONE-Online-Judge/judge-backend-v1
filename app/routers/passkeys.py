@@ -13,6 +13,7 @@ from pydantic import (
 )
 from app.services import passkeys, login_security, password_passkeys
 from app.services.access_logging import write_access_log, general_role
+from app.services.client_environment import request_environment
 from app.services.authz import bearer_token
 from app.services.errors import AppError
 from app.services.responses import ok
@@ -126,6 +127,7 @@ def login(payload: Authentication, request: Request, response: Response):
             payload.credential,
             payload.force_new_session,
             request.client.host,
+            client_environment=request_environment(request),
         )
     except SessionConflictError as exc:
         raise AppError(
@@ -150,7 +152,8 @@ def login(payload: Authentication, request: Request, response: Response):
 @router.post("/passkeys/login/transfer")
 def transfer_login(payload: LoginTransfer, request: Request, response: Response):
     session = passkeys.confirm_login_transfer(
-        str(payload.email), payload.proof_token, request.client.host
+        str(payload.email), payload.proof_token, request.client.host,
+        client_environment=request_environment(request),
     )
     return finish_passkey_login(request, response, session, True)
 

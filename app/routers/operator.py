@@ -980,10 +980,16 @@ async def delete_answer(contest_id: str, question_id: str, answer_id: str, reque
 @router.get("/operator/contests/{contest_id}/participants")
 async def participants(contest_id: str, request: Request):
     require_contest_staff(request, contest_id, "contest.participant.view")
+    from app.services.client_environment import operator_participant_sessions
+    with store._session() as db:
+        sessions = operator_participant_sessions(db, contest_id)
     items = []
     for team in store.participant_teams_for_operator(contest_id):
         division = store.get_division(contest_id, team.division_id)
-        items.append({**team.model_dump(mode="json"), "division": division.model_dump(mode="json") if division else None})
+        item = team.model_dump(mode="json")
+        for member in item["members"]:
+            member["sessions"] = sessions.get(member["team_member_id"], [])
+        items.append({**item, "division": division.model_dump(mode="json") if division else None})
     return page(request, items)
 
 

@@ -93,6 +93,7 @@ from app.services.contest_roles import permissions_for_roles, roles_for_scopes, 
 from app.services.automatic_notices import compact_automatic_notice, legacy_scheduled_notice, scheduled_notice_copy, scheduled_notice_id
 from app.services.notice_countdown import LABELS as COUNTDOWN_LABELS, countdown_template, notice_template, render_notice
 from app.services.security import decode_session_token, hash_password, new_session_token, token_hash
+from app.services.client_environment import classify_user_agent, decode_environment, describe_session, encode_environment, latest_descriptions
 from app.services.node_credentials import valid_node_credential
 from app.services.result_cache import cached_result
 from app.services import rejudging
@@ -426,6 +427,7 @@ def _audit_log(row: OperationalAuditLogRow) -> OperationalAuditLog:
         contest_id=row.contest_id,
         client_ip=row.client_ip,
         user_agent=row.user_agent,
+        environment=classify_user_agent(row.user_agent),
         request_id=row.request_id,
         details=details,
         created_at=_aware(row.created_at),
@@ -465,6 +467,7 @@ def _access_log(row: AccessLogRow) -> AccessLog:
         session_id=row.session_id,
         client_ip=row.client_ip,
         user_agent=row.user_agent,
+        environment=classify_user_agent(row.user_agent),
         request_id=row.request_id,
         details=details,
         created_at=_aware(row.created_at),
@@ -1814,7 +1817,7 @@ class DbStore:
                 conflicts.append(email)
         return sorted(set(conflicts))
 
-    def _issue_staff_session(self, db: Session, account: StaffAccountRow) -> dict:
+    def _issue_staff_session(self, db: Session, account: StaffAccountRow, *, client_environment=None) -> dict:
         access_token = new_session_token(
             "staff_access",
             account.staff_account_id,
@@ -1831,6 +1834,7 @@ class DbStore:
             access_expires_at=issued_at + timedelta(seconds=settings.staff_access_token_ttl_seconds),
             refresh_expires_at=issued_at + timedelta(seconds=settings.staff_refresh_token_ttl_seconds),
             last_seen_at=issued_at,
+            client_environment=encode_environment(client_environment),
         )
         db.add(session)
         db.commit()
@@ -1839,6 +1843,7 @@ class DbStore:
             "refresh_token": refresh_token,
             "staff": _staff(account).model_dump(mode="json"),
             "default_redirect": "/admin" if account.is_service_master else "/operator",
+            "environment": decode_environment(session.client_environment),
         }
 
     def create_staff_otp(self, email: str) -> str | None:
@@ -1879,7 +1884,7 @@ class DbStore:
             row = db.get(OtpCodeRow, email)
             return self._otp_retry_after_seconds(row, STAFF_OTP_SCOPE)
 
-    def verify_staff_otp(self, email: str, otp_code: str) -> dict | None:
+    def verify_staff_otp(self, email: str, otp_code: str, *, client_environment=None) -> dict | None:
         with self._session() as db:
             otp = db.get(OtpCodeRow, email)
             if not otp or otp.contest_id != STAFF_OTP_SCOPE or otp.code != otp_code or _aware(otp.expires_at) <= now_utc():
@@ -1888,7 +1893,7 @@ class DbStore:
             account = db.scalar(select(StaffAccountRow).where(StaffAccountRow.email == email))
             if not account:
                 return None
-            return self._issue_staff_session(db, account)
+            return self._issue_staff_session(db, account, client_environment=client_environment)
 
     def _has_general_login_identity(self, db: Session, email: str) -> bool:
         if is_internal_mail_recipient(email):
@@ -2021,7 +2026,7 @@ class DbStore:
             "operator_session": operator_session,
         }
 
-    def _issue_general_session(self, db: Session, email: str, profile: dict, *, strongly_verified: bool = False) -> dict:
+    def _issue_general_session(self, db: Session, email: str, profile: dict, *, strongly_verified: bool = False, client_environment=None) -> dict:
         from app.orm_models import IdentityAccountRow
         identity = db.scalar(select(IdentityAccountRow).where(IdentityAccountRow.email == email.lower()))
         if not identity:
@@ -2031,17 +2036,17 @@ class DbStore:
         access_token = new_session_token("general_access", email, settings.staff_access_token_ttl_seconds)
         refresh_token = new_session_token("general_refresh", email, settings.staff_refresh_token_ttl_seconds)
         issued_at = now_utc()
-        db.add(
-            GeneralSessionRow(
-                email=email,
-                access_token_hash=token_hash(access_token),
-                refresh_token_hash=token_hash(refresh_token),
-                issued_at=issued_at,
-                access_expires_at=issued_at + timedelta(seconds=settings.staff_access_token_ttl_seconds),
-                refresh_expires_at=issued_at + timedelta(seconds=settings.staff_refresh_token_ttl_seconds),
-                last_seen_at=issued_at,
-            )
+        session = GeneralSessionRow(
+            email=email,
+            access_token_hash=token_hash(access_token),
+            refresh_token_hash=token_hash(refresh_token),
+            issued_at=issued_at,
+            access_expires_at=issued_at + timedelta(seconds=settings.staff_access_token_ttl_seconds),
+            refresh_expires_at=issued_at + timedelta(seconds=settings.staff_refresh_token_ttl_seconds),
+            last_seen_at=issued_at,
+            client_environment=encode_environment(client_environment),
         )
+        db.add(session)
         if strongly_verified:
             db.flush()
             from app.services.login_security import mark_verified
@@ -2050,7 +2055,8 @@ class DbStore:
         db.commit()
         with self._session() as fresh_db:
             fresh_profile = self._general_profile(fresh_db, email, issue_operator_session=True)
-        result = {"access_token": access_token, "refresh_token": refresh_token, **(fresh_profile or profile)}
+        result = {"access_token": access_token, "refresh_token": refresh_token, **(fresh_profile or profile),
+            "environment": decode_environment(session.client_environment)}
         if result.get("operator_session"):
             result["operator_session"]["access_token"] = access_token
             result["operator_session"]["refresh_token"] = refresh_token
@@ -2095,6 +2101,10 @@ class DbStore:
         return {
             "active_session_count": active_count,
             "last_seen_at": latest_at.isoformat() if latest_at else None,
+            "sessions": latest_descriptions([
+                *[describe_session(row, "general") for row in general_sessions],
+                *[describe_session(row, "participant") for row in team_sessions],
+            ]),
         }
 
     def _revoke_active_login_sessions_for_email(self, db: Session, email: str) -> None:
@@ -2140,7 +2150,7 @@ class DbStore:
         if mark_revoked:
             member.session_revoked_at = revoked_at
 
-    def verify_general_otp(self, email: str, otp_code: str, force_new_session: bool = False) -> dict | None:
+    def verify_general_otp(self, email: str, otp_code: str, force_new_session: bool = False, *, client_environment=None) -> dict | None:
         with self._session() as db:
             otp = db.scalar(select(OtpCodeRow).where(OtpCodeRow.email == email).with_for_update())
             demo_bypass = settings.allow_empty_otp and otp_code == ""
@@ -2167,7 +2177,7 @@ class DbStore:
                         return None
                 else:
                     otp.verified_at = now_utc()
-            return self._issue_general_session(db, email, profile, strongly_verified=not demo_bypass)
+            return self._issue_general_session(db, email, profile, strongly_verified=not demo_bypass, client_environment=client_environment)
 
     def get_general_by_access_token(self, access_token: str) -> dict | None:
         if not _valid_session_token(access_token, "general_access"):
@@ -2183,6 +2193,8 @@ class DbStore:
                 return None
             profile = self._general_profile(db, session.email, issue_operator_session=True)
             self._touch_session(db, session)
+            if profile:
+                profile["environment"] = decode_environment(session.client_environment)
             if profile and profile.get("operator_session"):
                 profile["operator_session"]["access_token"] = access_token
                 profile["operator_session"]["refresh_token"] = ""
@@ -2267,7 +2279,8 @@ class DbStore:
             db.commit()
             if not profile:
                 return None
-            result = {"access_token": access_token, "refresh_token": refresh_token, **profile}
+            result = {"access_token": access_token, "refresh_token": refresh_token, **profile,
+                "environment": decode_environment(session.client_environment)}
             if result.get("operator_session"):
                 result["operator_session"]["access_token"] = access_token
                 result["operator_session"]["refresh_token"] = refresh_token
@@ -2294,6 +2307,7 @@ class DbStore:
         email: str,
         contest_id: str,
         parent_access_token: str | None = None,
+        *, client_environment=None,
     ) -> tuple[ParticipantTeam, TeamMember, ContestDivision, str] | None:
         with self._session() as db:
             member = db.scalar(select(TeamMemberRow).join(ContestRow, ContestRow.contest_id == TeamMemberRow.contest_id).where(TeamMemberRow.contest_id == contest_id, func.lower(TeamMemberRow.email) == email.lower()))
@@ -2345,6 +2359,7 @@ class DbStore:
                     access_token_hash=token_hash(access_token),
                     issued_at=now_utc(),
                     expires_at=now_utc() + timedelta(seconds=settings.participant_access_token_ttl_seconds),
+                    client_environment=encode_environment(client_environment),
                 )
             )
             db.commit()
@@ -2431,6 +2446,7 @@ class DbStore:
                 "refresh_token": refresh_token,
                 "staff": _staff(account).model_dump(mode="json"),
                 "default_redirect": "/admin" if account.is_service_master else "/operator",
+                "environment": decode_environment(session.client_environment),
             }
 
     def revoke_staff_session(self, access_token: str | None, refresh_token: str | None) -> bool:
@@ -3349,7 +3365,7 @@ class DbStore:
             )
             return _team(team) if team else None
 
-    def verify_otp(self, contest_id: str, email: str, otp_code: str, force_new_session: bool = False) -> tuple[ParticipantTeam, TeamMember, ContestDivision, str] | None:
+    def verify_otp(self, contest_id: str, email: str, otp_code: str, force_new_session: bool = False, *, client_environment=None) -> tuple[ParticipantTeam, TeamMember, ContestDivision, str] | None:
         with self._session() as db:
             otp = db.get(OtpCodeRow, email)
             demo_bypass = settings.allow_empty_otp and otp_code == ""
@@ -3391,6 +3407,7 @@ class DbStore:
                     access_token_hash=token_hash(access_token),
                     issued_at=now_utc(),
                     expires_at=now_utc() + timedelta(seconds=settings.participant_access_token_ttl_seconds),
+                    client_environment=encode_environment(client_environment),
                 )
             )
             db.commit()

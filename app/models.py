@@ -390,6 +390,7 @@ class OperationalAuditLog(BaseModel):
     contest_id: str | None = None
     client_ip: str | None = None
     user_agent: str | None = None
+    environment: dict[str, str] = Field(default_factory=dict)
     request_id: str | None = None
     details: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=now_utc)
@@ -411,6 +412,7 @@ class AccessLog(BaseModel):
     session_id: str | None = None
     client_ip: str | None = None
     user_agent: str | None = None
+    environment: dict[str, str] = Field(default_factory=dict)
     request_id: str | None = None
     details: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=now_utc)

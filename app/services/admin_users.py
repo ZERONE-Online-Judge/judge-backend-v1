@@ -12,6 +12,7 @@ from app.orm_models import (
 )
 from app.services.contest_roles import title_for_roles, title_for_scopes
 from app.services.errors import not_found
+from app.services.client_environment import active_user_sessions
 from app.services.store import OPERATOR_TEST_TEAM_PREFIX, _aware, _schedule_status
 
 
@@ -157,6 +158,7 @@ def user_detail(email: str):
         if db.scalar(query.where(sources.c.email == email).limit(1)) is None:
             raise not_found()
         user = _summaries(db, [email])[email]
+        user["sessions"] = active_user_sessions(db, email)
         memberships = list(db.execute(_members().where(func.lower(TeamMemberRow.email) == email).order_by(ContestRow.start_at.desc(), ContestRow.contest_id)))
         member_ids = [member.team_member_id for member, *_ in memberships]
         counts = {}
