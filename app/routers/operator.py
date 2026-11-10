@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 from uuid import uuid4
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Query, Request, UploadFile
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
@@ -112,7 +112,9 @@ class ParticipantCreateRequest(BaseModel):
 
 
 class ParticipantBulkCreateRequest(BaseModel):
-    teams: list[ParticipantCreateRequest]
+    # Validate each row independently so malformed rows do not discard all
+    # other rows or hide the information needed to correct a partial import.
+    teams: list[Any] = Field(max_length=1000)
 
 
 class ParticipantTeamUpdateRequest(BaseModel):
@@ -1008,30 +1010,15 @@ async def create_participant(contest_id: str, payload: ParticipantCreateRequest,
 @router.post("/operator/contests/{contest_id}/participants:bulk-create")
 async def bulk_create_participants(contest_id: str, payload: ParticipantBulkCreateRequest, request: Request):
     require_contest_staff(request, contest_id, "contest.participant.manage")
-    created = []
-    errors = []
-    for index, item in enumerate(payload.teams, start=1):
-        if not store.get_division(contest_id, item.division_id):
-            errors.append({"row": index, "team_name": item.team_name, "message": "Contest division is not configured."})
-            continue
-        try:
-            team = store.create_participant_team(
-                contest_id=contest_id,
-                division_id=item.division_id,
-                team_name=item.team_name,
-                leader_name=item.leader.name,
-                leader_email=str(item.leader.email),
-                members=[(member.name, str(member.email)) for member in item.members],
-            )
-            store.enqueue_participant_invite_for_team(contest_id, team.participant_team_id)
-            division = store.get_division(contest_id, team.division_id)
-            created.append({**team.model_dump(mode="json"), "division": division.model_dump(mode="json") if division else None})
-        except ValueError as error:
-            message = str(error)
-            if message.startswith("participant email already registered:"):
-                message = "participant email already registered"
-            errors.append({"row": index, "team_name": item.team_name, "message": message})
-    return ok(request, {"created": created, "errors": errors})
+    from app.services.participant_import import create_participants
+    return ok(request, create_participants(store, contest_id, payload.teams))
+
+
+@router.post("/operator/contests/{contest_id}/participants:bulk-preview")
+async def preview_bulk_participants(contest_id: str, payload: ParticipantBulkCreateRequest, request: Request):
+    require_contest_staff(request, contest_id, "contest.participant.manage", read_only=True)
+    from app.services.participant_import import preview_participants
+    return ok(request, preview_participants(store, contest_id, payload.teams))
 
 
 @router.patch("/operator/contests/{contest_id}/participants/{participant_team_id}")

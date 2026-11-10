@@ -379,6 +379,10 @@ def _client_ip(request: Request) -> str | None:
 @app.middleware("http")
 async def operational_audit_middleware(request: Request, call_next):
     path = request.url.path
+    if request.method.upper() == "POST" and re.fullmatch(r"/api/operator/contests/[^/]+/participants:bulk-preview", path):
+        # This endpoint only validates editable input; it must not create an
+        # operational audit entry or an operator-visit write before approval.
+        return await call_next(request)
     scope = _audit_scope(path)
     payload_details: dict[str, Any] = {}
     account = None

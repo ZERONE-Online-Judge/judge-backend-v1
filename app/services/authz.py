@@ -13,11 +13,11 @@ def bearer_token(request: Request) -> str | None:
     return token
 
 
-def require_staff(request: Request) -> StaffAccount:
+def require_staff(request: Request, *, read_only: bool = False) -> StaffAccount:
     token = bearer_token(request)
-    account = store.get_staff_by_access_token(token) if token else None
+    account = (store.get_staff_by_access_token(token, touch=False) if read_only else store.get_staff_by_access_token(token)) if token else None
     if not account and token:
-        account = store.get_staff_by_general_access_token(token)
+        account = store.get_staff_by_general_access_token(token, touch=False) if read_only else store.get_staff_by_general_access_token(token)
     if not account:
         raise authentication_required("Staff or general operator access token is required.")
     return account
@@ -51,8 +51,8 @@ def is_contest_master(account: StaffAccount, contest_id: str) -> bool:
     return account.is_service_master or "contest.*" in account.contest_scopes.get(contest_id, [])
 
 
-def require_contest_staff(request: Request, contest_id: str, *permissions: str) -> StaffAccount:
-    account = require_staff(request)
+def require_contest_staff(request: Request, contest_id: str, *permissions: str, read_only: bool = False) -> StaffAccount:
+    account = require_staff(request, read_only=read_only)
     if not is_contest_master(account, contest_id) and not any(
         has_contest_permission(account, contest_id, permission) for permission in (permissions or ("contest.view",))
     ):

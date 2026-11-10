@@ -2228,7 +2228,7 @@ class DbStore:
                 "division": _division(division),
             }
 
-    def get_staff_by_general_access_token(self, access_token: str) -> StaffAccount | None:
+    def get_staff_by_general_access_token(self, access_token: str, *, touch: bool = True) -> StaffAccount | None:
         if not _valid_session_token(access_token, "general_access"):
             return None
         with self._session() as db:
@@ -2243,7 +2243,8 @@ class DbStore:
             account = db.scalar(select(StaffAccountRow).where(StaffAccountRow.email == session.email))
             if not account:
                 return None
-            self._touch_session(db, session)
+            if touch:
+                self._touch_session(db, session)
             return _staff(account)
 
     def refresh_general_session(self, refresh_token: str) -> dict | None:
@@ -2353,7 +2354,7 @@ class DbStore:
             member_model = next(item for item in team_model.members if item.team_member_id == member.team_member_id)
             return team_model, member_model, _division(division), access_token
 
-    def get_staff_by_access_token(self, access_token: str) -> StaffAccount | None:
+    def get_staff_by_access_token(self, access_token: str, *, touch: bool = True) -> StaffAccount | None:
         if not _valid_session_token(access_token, "staff_access"):
             return None
         with self._session() as db:
@@ -2366,7 +2367,8 @@ class DbStore:
             if not session or _aware(session.access_expires_at) <= now_utc():
                 return None
             account = db.get(StaffAccountRow, session.staff_account_id)
-            self._touch_session(db, session)
+            if touch:
+                self._touch_session(db, session)
             return _staff(account) if account else None
 
     def get_participant_by_access_token(self, contest_id: str, access_token: str) -> dict | None:
@@ -3407,24 +3409,15 @@ class DbStore:
         leader_email: str,
         members: list[tuple[str, str]],
     ) -> ParticipantTeam:
+        from app.services.participant_import import creation_issues, email_fields, load_state, ParticipantCreationError
         with self._session() as db:
-            emails = [leader_email.strip(), *[email.strip() for _, email in members]]
-            normalized = [email.lower() for email in emails]
-            duplicated_within_payload = sorted({email for email in normalized if normalized.count(email) > 1})
-            if duplicated_within_payload:
-                raise ValueError(f"participant email already registered: {', '.join(duplicated_within_payload)}")
-            existing_emails = db.scalars(
-                select(TeamMemberRow.email).where(
-                    TeamMemberRow.contest_id == contest_id,
-                    func.lower(TeamMemberRow.email).in_(normalized),
-                )
-            ).all()
-            if existing_emails:
-                conflicts = sorted({email.lower() for email in existing_emails})
-                raise ValueError(f"participant email already registered: {', '.join(conflicts)}")
-            staff_conflicts = self._contest_staff_email_conflicts(db, contest_id, normalized)
-            if staff_conflicts:
-                raise ValueError(f"participant email cannot be operator/staff account: {', '.join(staff_conflicts)}")
+            # Staff assignment takes this same contest lock, so participant
+            # creation and operator/participant email exclusion stay ordered.
+            db.scalar(select(ContestRow).where(ContestRow.contest_id == contest_id).with_for_update())
+            fields = email_fields(leader_email, members)
+            errors = creation_issues(load_state(db, self, contest_id, [email for _, email in fields]), division_id, team_name, fields)
+            if errors:
+                raise ParticipantCreationError(errors)
             team = ParticipantTeamRow(contest_id=contest_id, division_id=division_id, team_name=team_name, status="invited")
             db.add(team)
             db.flush()
