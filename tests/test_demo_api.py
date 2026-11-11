@@ -3432,8 +3432,10 @@ def test_problem_solve_status_uses_live_participant_results_during_scoreboard_fr
     assert problem_stat["total_submissions"] == 2
     assert problem_stat["accepted_submissions"] == 1
     assert problem_stat["accepted_team_count"] == 1
+    assert problem_stat["attempted_team_count"] == 1
     assert problem_stat["total_team_count"] == len(live_scoreboard.json()["data"]["rows"])
     assert problem_stat["acceptance_rate"] == 50.0
+    assert problem_stat["team_acceptance_rate"] == 100.0
     assert problem_stat["first_accepted_team_id"] == login["team"]["participant_team_id"]
     assert problem_stat["first_accepted_team_name"] == login["team"]["team_name"]
     assert isinstance(problem_stat["first_accepted_elapsed_minutes"], int)

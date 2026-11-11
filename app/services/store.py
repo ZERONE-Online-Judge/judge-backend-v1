@@ -4900,6 +4900,7 @@ class DbStore:
                     "problem_code": problem.problem_code,
                     "total_submissions": 0,
                     "accepted_submissions": 0,
+                    "attempted_team_ids": set(),
                     "accepted_team_ids": set(),
                     "first_accepted_team_id": None,
                     "first_accepted_team_name": None,
@@ -4930,6 +4931,7 @@ class DbStore:
                 problem_stats = problem_stats_by_id.get(submission.problem_id)
                 if problem_stats is not None:
                     problem_stats["total_submissions"] += 1
+                    problem_stats["attempted_team_ids"].add(submission.participant_team_id)
                     if submission.status == SubmissionStatus.ACCEPTED.value:
                         solved_at = _aware(submission.submitted_at)
                         elapsed_minutes = max(0, int((solved_at - _aware(contest.start_at)).total_seconds() // 60))
@@ -5074,6 +5076,7 @@ class DbStore:
             total_team_count = len(teams)
             for problem in problems:
                 stats = problem_stats_by_id[problem.problem_id]
+                attempted_team_count = len(stats["attempted_team_ids"])
                 accepted_team_count = len(stats["accepted_team_ids"])
                 total_submissions = int(stats["total_submissions"])
                 accepted_submissions = int(stats["accepted_submissions"])
@@ -5083,10 +5086,14 @@ class DbStore:
                         "problem_code": stats["problem_code"],
                         "total_submissions": total_submissions,
                         "accepted_submissions": accepted_submissions,
+                        "attempted_team_count": attempted_team_count,
                         "accepted_team_count": accepted_team_count,
                         "total_team_count": total_team_count,
                         "acceptance_rate": round(accepted_submissions / total_submissions * 100, 1)
                         if total_submissions
+                        else None,
+                        "team_acceptance_rate": round(accepted_team_count / attempted_team_count * 100, 1)
+                        if attempted_team_count
                         else None,
                         "first_accepted_team_id": stats["first_accepted_team_id"],
                         "first_accepted_team_name": stats["first_accepted_team_name"],
