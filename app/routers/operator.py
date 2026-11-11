@@ -1322,9 +1322,15 @@ async def judge_history(contest_id: str, request: Request, limit: int = 100, cur
     )
 
 
-def _operator_scoreboard_payload(contest_id: str, request: Request, division_id: str | None = None):
+def _operator_scoreboard_payload(
+    contest_id: str,
+    request: Request,
+    division_id: str | None = None,
+    *,
+    view: Literal["operator", "participant"] = "operator",
+):
     account = require_contest_staff(request, contest_id, "contest.view", "contest.scoreboard.view")
-    live_view = has_contest_permission(account, contest_id, "contest.scoreboard.view")
+    live_view = view == "operator" and has_contest_permission(account, contest_id, "contest.scoreboard.view")
     contest = store.get_contest(contest_id)
     if not contest:
         raise not_found()
@@ -1336,7 +1342,7 @@ def _operator_scoreboard_payload(contest_id: str, request: Request, division_id:
     if division_id and not division:
         raise not_found()
     public_board = store.scoreboard_rows(contest_id, division_id, public_view=True)
-    # Never calculate or return the real standings for a basic staff viewer.
+    # Participant projections must never calculate or return real standings.
     board = store.scoreboard_rows(contest_id, division_id, public_view=False) if live_view else public_board
     if not board:
         raise not_found()
@@ -1352,13 +1358,13 @@ def _operator_scoreboard_payload(contest_id: str, request: Request, division_id:
 
 
 @router.get("/operator/contests/{contest_id}/scoreboard/internal")
-def internal_scoreboard(contest_id: str, request: Request):
-    return ok(request, _operator_scoreboard_payload(contest_id, request))
+def internal_scoreboard(contest_id: str, request: Request, view: Literal["operator", "participant"] = "operator"):
+    return ok(request, _operator_scoreboard_payload(contest_id, request, view=view))
 
 
 @router.get("/operator/contests/{contest_id}/divisions/{division_id}/scoreboard/internal")
-def division_internal_scoreboard(contest_id: str, division_id: str, request: Request):
-    return ok(request, _operator_scoreboard_payload(contest_id, request, division_id))
+def division_internal_scoreboard(contest_id: str, division_id: str, request: Request, view: Literal["operator", "participant"] = "operator"):
+    return ok(request, _operator_scoreboard_payload(contest_id, request, division_id, view=view))
 
 
 class ScoreboardReleaseRequest(BaseModel):
