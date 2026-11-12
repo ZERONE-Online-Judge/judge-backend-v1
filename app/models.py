@@ -104,6 +104,10 @@ class TeamMember(BaseModel):
     role: TeamMemberRole
     name: str
     email: EmailStr
+    access_blocked: bool = False
+    access_block_reason: str | None = None
+    access_blocked_at: datetime | None = None
+    access_blocked_by: str | None = None
     active_sessions: int = 0
     last_login_at: datetime | None = None
     last_session_seen_at: datetime | None = None
@@ -115,6 +119,10 @@ class ParticipantTeam(BaseModel):
     division_id: str
     team_name: str
     status: str = "invited"
+    access_blocked: bool = False
+    access_block_reason: str | None = None
+    access_blocked_at: datetime | None = None
+    access_blocked_by: str | None = None
     members: list[TeamMember]
     created_at: datetime = Field(default_factory=now_utc)
 

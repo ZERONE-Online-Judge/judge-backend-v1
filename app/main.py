@@ -158,6 +158,8 @@ def _audit_action(method: str, path: str) -> str:
         return "Editor 문제 가져오기"
     if method.upper() == "POST" and re.search(r"/editor-problems/[a-f0-9]{32}/packages$", path):
         return "Editor 검증 패키지 준비"
+    if method.upper() == "PATCH" and re.fullmatch(r"/api/operator/contests/[^/]+/participants/[^/]+(?:/members/[^/]+)?/access", path):
+        return "참가자 대회 접근 설정"
     normalized_path = ID_SEGMENT_PATTERN.sub("/{id}", path)
     return f"{method.upper()} {normalized_path.removeprefix('/api')}"
 
@@ -247,8 +249,8 @@ def _audit_existing_values(path: str, body=None, *, after=False) -> dict[str, An
         (r"/operator/contests/([^/]+)/settings", orm_models.ContestRow),
         (r"/operator/contests/[^/]+/divisions/([^/]+)", orm_models.ContestDivisionRow),
         (r"/operator/contests/[^/]+/notices/([^/]+)", orm_models.ContestNoticeRow),
-        (r"/operator/contests/[^/]+/participants/([^/]+)", orm_models.ParticipantTeamRow),
-        (r"/operator/contests/[^/]+/participants/[^/]+/members/([^/]+)", orm_models.TeamMemberRow),
+        (r"/operator/contests/[^/]+/participants/([^/]+)(?:/access)?", orm_models.ParticipantTeamRow),
+        (r"/operator/contests/[^/]+/participants/[^/]+/members/([^/]+)(?:/access)?", orm_models.TeamMemberRow),
         (r"/operator/contests/[^/]+/problems/([^/]+)", orm_models.ProblemRow),
         (r"/operator/contests/[^/]+/problems/[^/]+/assets/([^/]+)", orm_models.ProblemAssetRow),
         (r"/operator/contests/[^/]+/problems/[^/]+/testcase-sets/([^/]+)", orm_models.TestcaseSetRow),
@@ -304,9 +306,9 @@ def _audit_path_entities(path: str) -> dict[str, str]:
             r"^/api/operator/contests/([^/]+)/boards/([^/]+)/answers/([^/]+)$",
             ["contest_id", "question_id", "answer_id"],
         ),
-        (r"^/api/operator/contests/([^/]+)/participants/([^/]+)$", ["contest_id", "participant_team_id"]),
+        (r"^/api/operator/contests/([^/]+)/participants/([^/]+)(?:/access)?$", ["contest_id", "participant_team_id"]),
         (
-            r"^/api/operator/contests/([^/]+)/participants/([^/]+)/members/([^/]+)(?:/sessions:revoke)?$",
+            r"^/api/operator/contests/([^/]+)/participants/([^/]+)/members/([^/]+)(?:/sessions:revoke|/access)?$",
             ["contest_id", "participant_team_id", "team_member_id"],
         ),
         (r"^/api/operator/contests/([^/]+)/problems/([^/]+)$", ["contest_id", "problem_id"]),

@@ -46,7 +46,7 @@ def visible_private_contest_ids(token: str | None) -> set[str]:
         return {cid for cid, scopes in staff.contest_scopes.items() if scopes}
     claims = decode_session_token(token, "participant_access")
     cid = claims.get("contest_id") if claims else None
-    if cid and store.get_participant_by_access_token(cid, token):
+    if cid and store.get_participant_by_access_token(cid, token, enforce_access=False):
         return {cid}
     return set()
 

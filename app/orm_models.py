@@ -103,6 +103,10 @@ class TeamMemberRow(Base):
     name: Mapped[str] = mapped_column(String(120))
     email: Mapped[str] = mapped_column(String(255), index=True)
     active_sessions: Mapped[int] = mapped_column(Integer, default=0)
+    access_blocked: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    access_block_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    access_blocked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    access_blocked_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     session_revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -116,6 +120,10 @@ class ParticipantTeamRow(Base):
     division_id: Mapped[str] = mapped_column(ForeignKey("contest_divisions.division_id"), index=True)
     team_name: Mapped[str] = mapped_column(String(255))
     status: Mapped[str] = mapped_column(String(32), default="invited")
+    access_blocked: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    access_block_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    access_blocked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    access_blocked_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
     members: Mapped[list[TeamMemberRow]] = relationship(cascade="all, delete-orphan", lazy="selectin")

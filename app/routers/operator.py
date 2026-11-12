@@ -123,6 +123,11 @@ class ParticipantTeamUpdateRequest(BaseModel):
     status: str | None = None
 
 
+class ParticipantAccessUpdateRequest(BaseModel):
+    blocked: bool = Field(strict=True)
+    reason: str | None = Field(default=None, max_length=1000)
+
+
 class TeamMemberCreateRequest(BaseModel):
     name: str
     email: EmailStr
@@ -1048,6 +1053,27 @@ async def update_participant(contest_id: str, participant_team_id: str, payload:
         raise not_found()
     division = store.get_division(contest_id, team.division_id)
     return ok(request, {**team.model_dump(mode="json"), "division": division.model_dump(mode="json") if division else None})
+
+
+@router.patch("/operator/contests/{contest_id}/participants/{participant_team_id}/access")
+async def update_team_access(contest_id: str, participant_team_id: str, payload: ParticipantAccessUpdateRequest, request: Request):
+    account = require_contest_staff(request, contest_id, "contest.participant.manage")
+    team = store.set_participant_access(contest_id, participant_team_id,
+        blocked=payload.blocked, reason=payload.reason, actor_email=str(account.email))
+    if not team:
+        raise not_found()
+    division = store.get_division(contest_id, team.division_id)
+    return ok(request, {**team.model_dump(mode="json"), "division": division.model_dump(mode="json") if division else None})
+
+
+@router.patch("/operator/contests/{contest_id}/participants/{participant_team_id}/members/{team_member_id}/access")
+async def update_member_access(contest_id: str, participant_team_id: str, team_member_id: str, payload: ParticipantAccessUpdateRequest, request: Request):
+    account = require_contest_staff(request, contest_id, "contest.participant.manage")
+    member = store.set_participant_access(contest_id, participant_team_id,
+        blocked=payload.blocked, reason=payload.reason, actor_email=str(account.email), team_member_id=team_member_id)
+    if not member:
+        raise not_found()
+    return ok(request, member.model_dump(mode="json"))
 
 
 @router.delete("/operator/contests/{contest_id}/participants/{participant_team_id}")

@@ -17,6 +17,7 @@ from app.database import SessionLocal, create_schema
 from app.services.request_sessions import after_commit, borrowed_session, current_session
 from app.services.contest_visibility import contest_is_public, contest_hidden_by_status, normalize_private_resources
 from app.services.errors import AppError, TestcaseResultsInvalid, permission_denied
+from app.services.participant_access import require_participant_access
 from app.services.judging_inputs import require_active_testcases, TEST_BASED_KINDS, QUEUED_TESTCASES_NOT_READY
 from app.settings import settings
 from app.problem_languages import validate_statement_fields
@@ -230,12 +231,20 @@ def _team(row: ParticipantTeamRow) -> ParticipantTeam:
         division_id=row.division_id,
         team_name=row.team_name,
         status=row.status,
+        access_blocked=bool(row.access_blocked),
+        access_block_reason=row.access_block_reason,
+        access_blocked_at=_aware(row.access_blocked_at),
+        access_blocked_by=row.access_blocked_by,
         members=[
             TeamMember(
                 team_member_id=member.team_member_id,
                 role=_member_role(member.role),
                 name=member.name,
                 email=member.email,
+                access_blocked=bool(member.access_blocked),
+                access_block_reason=member.access_block_reason,
+                access_blocked_at=_aware(member.access_blocked_at),
+                access_blocked_by=member.access_blocked_by,
                 active_sessions=member.active_sessions,
                 last_login_at=_aware(member.last_login_at),
                 last_session_seen_at=None,
@@ -244,6 +253,17 @@ def _team(row: ParticipantTeamRow) -> ParticipantTeam:
         ],
         created_at=_aware(row.created_at),
     )
+
+
+def _participant_team(row: ParticipantTeamRow) -> ParticipantTeam:
+    """Keep operator-only restriction metadata out of participant rosters."""
+    team = _team(row)
+    team.access_blocked_by = None
+    for member in team.members:
+        member.access_block_reason = None
+        member.access_blocked_at = None
+        member.access_blocked_by = None
+    return team
 
 
 def _problem(row: ProblemRow) -> Problem:
@@ -1976,7 +1996,7 @@ class DbStore:
             division = db.get(ContestDivisionRow, team.division_id) if team else None
             if not team or not contest or not division:
                 continue
-            team_model = _team(team)
+            team_model = _participant_team(team)
             member_model = next((item for item in team_model.members if item.team_member_id == member.team_member_id), None)
             if not member_model:
                 continue
@@ -2200,7 +2220,7 @@ class DbStore:
                 profile["operator_session"]["refresh_token"] = ""
             return profile
 
-    def get_participant_by_general_access_token(self, contest_id: str, access_token: str) -> dict | None:
+    def get_participant_by_general_access_token(self, contest_id: str, access_token: str, *, enforce_access: bool = True) -> dict | None:
         if not _valid_session_token(access_token, "general_access"):
             return None
         with self._session() as db:
@@ -2229,7 +2249,9 @@ class DbStore:
             self._touch_session(db, session)
             if not team or not division:
                 return None
-            team_model = _team(team)
+            if enforce_access:
+                require_participant_access(team, member)
+            team_model = _participant_team(team)
             member_model = next(
                 item for item in team_model.members
                 if item.team_member_id == member.team_member_id
@@ -2337,6 +2359,7 @@ class DbStore:
             )
             if not team:
                 return None
+            require_participant_access(team, member)
             division = db.get(ContestDivisionRow, team.division_id)
             if not division:
                 return None
@@ -2365,7 +2388,7 @@ class DbStore:
             db.commit()
             db.refresh(member)
             db.refresh(team)
-            team_model = _team(team)
+            team_model = _participant_team(team)
             member_model = next(item for item in team_model.members if item.team_member_id == member.team_member_id)
             return team_model, member_model, _division(division), access_token
 
@@ -2386,7 +2409,7 @@ class DbStore:
                 self._touch_session(db, session)
             return _staff(account) if account else None
 
-    def get_participant_by_access_token(self, contest_id: str, access_token: str) -> dict | None:
+    def get_participant_by_access_token(self, contest_id: str, access_token: str, *, enforce_access: bool = True) -> dict | None:
         if not _valid_session_token(access_token, "participant_access"):
             from app.services.participant_preview import get_preview_participant
             return get_preview_participant(contest_id, access_token)
@@ -2411,9 +2434,11 @@ class DbStore:
                 return None
             if member.session_revoked_at and _aware(session.issued_at) <= _aware(member.session_revoked_at):
                 return None
+            if enforce_access:
+                require_participant_access(team, member)
             self._touch_session(db, session)
             db.info.setdefault("request_divisions", {})[division.division_id] = division
-            team_model = _team(team)
+            team_model = _participant_team(team)
             member_model = next(item for item in team_model.members if item.team_member_id == member.team_member_id)
             return {
                 "team": team_model,
@@ -3384,13 +3409,6 @@ class DbStore:
             member = db.scalar(select(TeamMemberRow).where(TeamMemberRow.contest_id == contest_id, TeamMemberRow.email == email))
             if not member:
                 return None
-            conflict = self._active_login_session_summary(db, email)
-            if conflict and not force_new_session:
-                raise SessionConflictError(conflict)
-            if conflict and force_new_session:
-                self._revoke_active_login_sessions_for_email(db, email)
-            member.active_sessions += 1
-            member.last_login_at = now_utc()
             team = db.scalar(
                 select(ParticipantTeamRow)
                 .options(selectinload(ParticipantTeamRow.members))
@@ -3398,6 +3416,14 @@ class DbStore:
             )
             if not team:
                 return None
+            require_participant_access(team, member)
+            conflict = self._active_login_session_summary(db, email)
+            if conflict and not force_new_session:
+                raise SessionConflictError(conflict)
+            if conflict and force_new_session:
+                self._revoke_active_login_sessions_for_email(db, email)
+            member.active_sessions += 1
+            member.last_login_at = now_utc()
             team.status = "active"
             division = db.get(ContestDivisionRow, team.division_id)
             access_token = new_session_token(
@@ -3421,7 +3447,7 @@ class DbStore:
             db.commit()
             db.refresh(member)
             db.refresh(team)
-            team_model = _team(team)
+            team_model = _participant_team(team)
             member_model = team_model.members[[item.team_member_id for item in team.members].index(member.team_member_id)]
             return team_model, member_model, _division(division), access_token
 
@@ -3501,6 +3527,31 @@ class DbStore:
             db.commit()
             db.refresh(row)
             return _team(row)
+
+    def set_participant_access(
+        self, contest_id: str, participant_team_id: str, *, blocked: bool,
+        reason: str | None, actor_email: str, team_member_id: str | None = None,
+    ) -> ParticipantTeam | TeamMember | None:
+        with self._session() as db:
+            team = db.scalar(select(ParticipantTeamRow).options(selectinload(ParticipantTeamRow.members)).where(
+                ParticipantTeamRow.contest_id == contest_id,
+                ParticipantTeamRow.participant_team_id == participant_team_id,
+            ).with_for_update())
+            if not team:
+                return None
+            target = team
+            if team_member_id is not None:
+                target = next((member for member in team.members if member.team_member_id == team_member_id), None)
+                if target is None:
+                    return None
+            target.access_blocked = blocked
+            target.access_block_reason = ((reason or "").strip() or None) if blocked else None
+            target.access_blocked_at = now_utc() if blocked else None
+            target.access_blocked_by = actor_email if blocked else None
+            db.commit()
+            db.refresh(team)
+            model = _team(team)
+            return next(member for member in model.members if member.team_member_id == team_member_id) if team_member_id is not None else model
 
     def delete_participant_team(self, contest_id: str, participant_team_id: str) -> tuple[bool, str | None]:
         with self._session() as db:
@@ -4179,6 +4230,7 @@ class DbStore:
             team = db.get(ParticipantTeamRow, member.participant_team_id)
             if not team or team.division_id != problem.division_id:
                 raise ValueError("division mismatch")
+            require_participant_access(team, member)
             require_active_testcases(db, problem_id)
             submission = SubmissionRow(
                 contest_id=contest_id,

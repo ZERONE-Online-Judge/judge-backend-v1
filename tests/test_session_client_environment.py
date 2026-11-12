@@ -230,7 +230,8 @@ def test_nullable_session_environment_migration_preserves_legacy_rows_and_downgr
     monkeypatch.setattr(settings, "database_url", url)
     cfg = Config("alembic.ini")
     command.stamp(cfg, "0061_resolver_release_default")
-    command.upgrade(cfg, "head")
+    # This fixture contains only the session tables needed by this migration.
+    command.upgrade(cfg, "0062_session_client_environment")
     for table in ("general_sessions", "staff_sessions", "team_sessions"):
         columns = {column["name"]: column for column in inspect(migration_engine).get_columns(table)}
         assert columns["client_environment"]["nullable"] is True

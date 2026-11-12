@@ -345,6 +345,17 @@ def create_schema() -> None:
             if "session_revoked_at" not in columns:
                 with engine.begin() as connection:
                     connection.execute(text("ALTER TABLE team_members ADD COLUMN session_revoked_at DATETIME"))
+        for table in ("participant_teams", "team_members"):
+            columns = {column["name"] for column in inspector.get_columns(table)}
+            with engine.begin() as connection:
+                for name, declaration in (
+                    ("access_blocked", "BOOLEAN NOT NULL DEFAULT 0"),
+                    ("access_block_reason", "TEXT"),
+                    ("access_blocked_at", "DATETIME"),
+                    ("access_blocked_by", "VARCHAR(255)"),
+                ):
+                    if name not in columns:
+                        connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {declaration}"))
         if "judge_nodes" in inspector.get_table_names():
             columns = {column["name"] for column in inspector.get_columns("judge_nodes")}
             for name, declaration in [("allow_zoj", "BOOLEAN NOT NULL DEFAULT 1"), ("allow_editor", "BOOLEAN NOT NULL DEFAULT 1"), ("execution_capabilities", "JSON NOT NULL DEFAULT '[]'"), ("execution_revision", "VARCHAR(128)")]:

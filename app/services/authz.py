@@ -66,6 +66,10 @@ def require_contest_staff(request: Request, contest_id: str, *permissions: str, 
 def require_participant(request: Request, contest_id: str) -> dict:
     token = bearer_token(request)
     session = store.get_participant_by_access_token(contest_id, token) if token else None
+    if not session and token:
+        # Enforce contest restrictions before the token-kind error; callers
+        # cannot turn a blocked participant into a public/general fallback.
+        store.get_participant_by_general_access_token(contest_id, token)
     if not session:
         raise authentication_required("Participant access token is required.")
     return session

@@ -16,15 +16,15 @@ from app.services.store import store
 router = APIRouter(tags=["public"])
 
 
-def _contest_payload(contest, request: Request) -> dict:
+def _contest_payload(contest, request: Request, *, enforce_access: bool = True) -> dict:
     payload = contest_payload_for_view(contest)
-    if contest.emergency_notice and payload["emergency_notice"] is None:
+    if enforce_access or (contest.emergency_notice and payload["emergency_notice"] is None):
         token = bearer_token(request)
         participant = (
-            store.get_participant_by_access_token(contest.contest_id, token)
-            or store.get_participant_by_general_access_token(contest.contest_id, token)
+            store.get_participant_by_access_token(contest.contest_id, token, enforce_access=enforce_access)
+            or store.get_participant_by_general_access_token(contest.contest_id, token, enforce_access=enforce_access)
         ) if token else None
-        if participant:
+        if participant and not (participant["team"].access_blocked or participant["member"].access_blocked):
             return contest_payload_for_view(contest, participant)
     return payload
 
@@ -80,7 +80,7 @@ def contests(request: Request, response: Response):
     response.headers["Cache-Control"] = "private, no-store"
     response.headers["Vary"] = "Authorization"
     allowed_ids = visible_private_contest_ids(bearer_token(request))
-    return page(request, [_contest_payload(contest, request) for contest in store.visible_public_contests(allowed_ids)])
+    return page(request, [_contest_payload(contest, request, enforce_access=False) for contest in store.visible_public_contests(allowed_ids)])
 
 
 @router.get("/public/contests/{contest_id}")

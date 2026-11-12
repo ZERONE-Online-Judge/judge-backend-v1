@@ -16,6 +16,7 @@ from app.services.client_environment import request_environment
 from app.services.authz import bearer_token, has_contest_permission, require_participant
 from app.services.contest_visibility import contest_has_ended, contest_payload_for_view
 from app.services.errors import AppError, authentication_required, invalid_state, not_found, permission_denied
+from app.services.participant_access import require_participant_access
 from app.services.mail_templates import absolute_url, render_branded_email
 from app.services.responses import ok, page
 from app.services.participant_preview import (
@@ -305,6 +306,8 @@ def request_otp(contest_id: str, payload: OtpRequest, request: Request):
     team = store.get_team_by_email(contest_id, str(payload.email))
     if not team:
         raise not_found("Participant email is not registered.")
+    member = next(member for member in team.members if str(member.email).lower() == str(payload.email).lower())
+    require_participant_access(team, member)
     retry_after = store.participant_otp_retry_after_seconds(contest_id, str(payload.email))
     if retry_after > 0:
         raise AppError(
@@ -384,10 +387,7 @@ def verify_otp(contest_id: str, payload: OtpVerifyRequest, request: Request):
 @router.get("/contests/{contest_id}/participant-session/me")
 @request_database
 def participant_me(contest_id: str, request: Request):
-    token = bearer_token(request)
-    session = store.get_participant_by_access_token(contest_id, token) if token else None
-    if not session:
-        raise AppError(401, "authentication_required", "Participant access token is required.")
+    session = require_participant(request, contest_id)
     if session.get("is_preview"):
         return ok(request, {"team": session["team"].model_dump(mode="json"), "member": session["member"].model_dump(mode="json"), "division": session["division"].model_dump(mode="json"), "is_preview": True})
     write_access_log(
