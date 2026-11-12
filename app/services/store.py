@@ -2786,19 +2786,27 @@ class DbStore:
 
     def transfer_contest_owner(self, contest_id: str, target_email: str, actor: StaffAccount) -> list[StaffAccount]:
         with self._session() as db:
-            contest = db.scalar(select(ContestRow).where(ContestRow.contest_id == contest_id).with_for_update())
+            contest = db.scalar(select(ContestRow).where(ContestRow.contest_id == contest_id)
+                .with_for_update().execution_options(populate_existing=True))
             if not contest:
                 raise AppError(404, "not_found", "대회를 찾을 수 없습니다.")
-            # The authoritative owner id is checked again under the same lock as
-            # the update; stale tokens and concurrent requests cannot take over.
-            if contest.owner_staff_account_id != actor.staff_account_id:
-                raise AppError(403, "contest_owner_transfer_denied", "현재 대회 총괄만 총괄 권한을 위임할 수 있습니다.")
+            # Lock the persisted actor together with both affected accounts in a
+            # deterministic order. A cached service-master flag must never grant
+            # authority after that permission has been revoked.
+            previous_owner_id = contest.owner_staff_account_id
+            normalized_target = target_email.strip().lower()
             accounts = db.scalars(select(StaffAccountRow).where(
-                (StaffAccountRow.staff_account_id == actor.staff_account_id) |
-                (func.lower(StaffAccountRow.email) == target_email.strip().lower())
-            ).order_by(StaffAccountRow.staff_account_id).with_for_update()).all()
-            previous = next((a for a in accounts if a.staff_account_id == actor.staff_account_id), None)
-            target = next((a for a in accounts if a.email.lower() == target_email.strip().lower()), None)
+                StaffAccountRow.staff_account_id.in_({actor.staff_account_id, previous_owner_id}) |
+                (func.lower(StaffAccountRow.email) == normalized_target)
+            ).order_by(StaffAccountRow.staff_account_id).with_for_update()
+                .execution_options(populate_existing=True)).all()
+            current_actor = next((a for a in accounts if a.staff_account_id == actor.staff_account_id), None)
+            if not current_actor or (not current_actor.is_service_master and previous_owner_id != current_actor.staff_account_id):
+                raise AppError(403, "contest_owner_transfer_denied", "현재 대회 총괄 또는 서비스 마스터만 총괄을 변경할 수 있습니다.")
+            previous = next((a for a in accounts if a.staff_account_id == previous_owner_id), None)
+            if not previous:
+                raise AppError(409, "contest_owner_changed", "현재 총괄을 확인할 수 없습니다. 운영자 목록을 새로 확인해 주세요.")
+            target = next((a for a in accounts if a.email.lower() == normalized_target), None)
             if not target or target.is_service_master or not json.loads(target.contest_scopes or "{}").get(contest_id):
                 raise AppError(422, "contest_owner_target_invalid", "이 대회에 등록된 운영자를 선택해 주세요.")
             if target is previous:
@@ -2817,7 +2825,7 @@ class DbStore:
                 account.contest_roles = json.dumps(selections)
                 account.protected_master_contests = json.dumps(protected)
             db.execute(delete(ParticipantPreviewSessionRow).where(ParticipantPreviewSessionRow.staff_account_id == target.staff_account_id, ParticipantPreviewSessionRow.contest_id == contest_id))
-            claimed = db.execute(update(ContestRow).where(ContestRow.contest_id == contest_id, ContestRow.owner_staff_account_id == actor.staff_account_id).values(owner_staff_account_id=target.staff_account_id))
+            claimed = db.execute(update(ContestRow).where(ContestRow.contest_id == contest_id, ContestRow.owner_staff_account_id == previous_owner_id).values(owner_staff_account_id=target.staff_account_id))
             if claimed.rowcount != 1:
                 raise AppError(409, "contest_owner_changed", "총괄이 이미 변경되었습니다. 운영자 목록을 새로 확인해 주세요.")
             db.commit()
