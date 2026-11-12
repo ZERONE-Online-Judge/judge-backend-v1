@@ -15,6 +15,11 @@ def presentation_board(
     if not contest:
         raise not_found()
 
+    divisions = store.contest_divisions(contest_id)
+    available_divisions = [
+        {"division_id": division.division_id, "code": division.code, "name": division.name}
+        for division in divisions
+    ]
     contest_data = contest.model_dump(mode="json")
     if display_only:
         contest_data = {
@@ -35,9 +40,9 @@ def presentation_board(
             and aware(contest.end_at) <= now_utc()
         )
         if not ended and aware(contest.start_at) > now_utc():
-            return {"contest": contest_data, "sections": []}
+            return {"contest": contest_data, "sections": [], "available_divisions": available_divisions}
     sections = []
-    for division in store.contest_divisions(contest_id):
+    for division in divisions:
         if division_ids is not None and division.division_id not in division_ids:
             continue
         board = store.scoreboard_rows(
@@ -75,4 +80,4 @@ def presentation_board(
             }
         )
 
-    return {"contest": contest_data, "sections": sections}
+    return {"contest": contest_data, "sections": sections, "available_divisions": available_divisions}

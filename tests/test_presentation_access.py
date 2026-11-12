@@ -13,6 +13,7 @@ from app.main import app
 from app.models import ContestStatus, now_utc
 from app.orm_models import PresentationAccountRow, StaffAccountRow, TeamMemberRow, SubmissionRow
 from app.services import presentation_access
+from app.services.security import decode_session_token, new_session_token
 from app.services.store import store
 
 client = TestClient(app)
@@ -103,29 +104,68 @@ def test_passwordless_login_reads_only_its_public_presentation(setup):
     assert client.post(f'/api/contests/{cid}/problems/x/submissions', headers=token, json={'language':'cpp17', 'source_code':'x'}).status_code in (401, 403)
 
 
-def test_reissue_revoke_expiry_and_new_login_invalidate_old_sessions(setup):
+def test_independent_display_logins_keep_all_screens_authenticated(setup):
+    cid, _, _, _, account = setup
+    sessions = []
+    for agent in ('Presentation screen 1', 'Presentation screen 2', 'Presentation screen 3'):
+        response = TestClient(app).post('/api/auth/presentation/login',
+            json={'email': account['email']},
+            headers={'x-real-ip': str(uuid4()), 'User-Agent': agent})
+        assert response.status_code == 200, response.text
+        sessions.append(response.json()['data'])
+        assert all(display(cid, session).status_code == 200 for session in sessions)
+    claims = [decode_session_token(session['access_token'], 'presentation') for session in sessions]
+    assert len({claim['jti'] for claim in claims}) == 3
+    assert len({claim['credential_id'] for claim in claims}) == 1
+    assert all(claim['sub'] == cid for claim in claims)
+
+
+def test_reissue_revoke_and_account_expiry_invalidate_every_display_session(setup):
     cid, did, endpoint, headers, account = setup
     first = login(account['email']).json()['data']
     second = login(account['email']).json()['data']
-    assert display(cid, first).status_code == 401
+    assert display(cid, first).status_code == 200
     assert display(cid, second).status_code == 200
     new = client.put(endpoint, headers=headers).json()['data']
     assert new['email'] != account['email']
+    assert display(cid, first).status_code == 401
     assert display(cid, second).status_code == 401
     assert login(account['email']).status_code == 401
-    current = login(new['email']).json()['data']
+    current = [login(new['email']).json()['data'] for _ in range(2)]
+    assert all(display(cid, session).status_code == 200 for session in current)
     assert client.delete(endpoint, headers=headers).status_code == 200
-    assert display(cid, current).status_code == 401
+    assert all(display(cid, session).status_code == 401 for session in current)
     assert login(new['email']).status_code == 401
     assert client.get(endpoint, headers=headers).json()['data'] is None
     account = client.put(endpoint, headers=headers).json()['data']
-    current = login(account['email']).json()['data']
+    current = [login(account['email']).json()['data'] for _ in range(2)]
+    assert all(display(cid, session).status_code == 200 for session in current)
     with store._session() as db:
         db.get(PresentationAccountRow, cid).expires_at = now_utc() - timedelta(seconds=1)
         db.commit()
     assert client.get(endpoint, headers=headers).json()['data']['active'] is False
-    assert display(cid, current).status_code == 401
+    assert all(display(cid, session).status_code == 401 for session in current)
     assert login(account['email']).status_code == 401
+
+
+def test_concurrent_session_policy_keeps_signature_expiry_and_scope_checks(setup):
+    cid, _, _, _, account = setup
+    valid = login(account['email']).json()['data']
+    claims = decode_session_token(valid['access_token'], 'presentation')
+    credential = {'credential_id': claims['credential_id']}
+    # Even correctly signed tokens need the current credential, scope and expiry.
+    rejected = [
+        'invalid',
+        'A' + valid['access_token'][1:],
+        new_session_token('presentation', cid, -1, credential),
+        new_session_token('general', cid, 600, credential),
+        new_session_token('presentation', 'other-contest', 600, credential),
+        new_session_token('presentation', cid, 600, {'credential_id': 'stale'}),
+        new_session_token('presentation', cid, 600),
+    ]
+    for token in rejected:
+        assert display(cid, {'access_token': token}).status_code == 401
+    assert display(cid, valid).status_code == 200
 
 
 def test_otp_endpoints_cannot_turn_display_credentials_into_general_accounts(setup):
@@ -167,12 +207,23 @@ def test_display_obeys_rank_release_and_does_not_leak_hidden_team(setup):
     assert 'Hidden result team' in display(cid, session).text
 
 
-def test_before_start_display_payload_contains_only_countdown_metadata(setup):
+def test_before_start_display_payload_contains_only_countdown_metadata(setup, monkeypatch):
     cid, did, endpoint, headers, account = setup
+    other = store.create_contest_division(cid, 'B', 'Other division')
+    outside = store.create_contest('Outside contest', 'Test', '')
+    outside_division = store.create_contest_division(outside.contest_id, 'C', 'Private other division')
     store.update_contest_settings(cid, start_at=now_utc() + timedelta(days=1),
         freeze_at=now_utc() + timedelta(days=1, hours=2), end_at=now_utc() + timedelta(days=1, hours=3))
+    def no_board(*args, **kwargs):
+        raise AssertionError('Pre-start displays must not compute scoreboards')
+    monkeypatch.setattr(store, 'scoreboard_rows', no_board)
     response = display(cid, login(account['email']).json()['data'])
     assert response.status_code == 200
     assert response.json()['data']['sections'] == []
+    assert response.json()['data']['available_divisions'] == [
+        {'division_id': did, 'code': 'A', 'name': 'Division'},
+        {'division_id': other.division_id, 'code': 'B', 'name': 'Other division'},
+    ]
+    assert outside_division.division_id not in response.text
     assert 'Hidden result team' not in response.text and 'PRIVATE' not in response.text
     assert 'owner_staff_account_id' not in response.text

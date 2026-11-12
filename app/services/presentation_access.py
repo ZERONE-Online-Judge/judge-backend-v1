@@ -95,7 +95,6 @@ def login(email: str, client_key: str) -> dict:
         if ttl <= 0:
             raise authentication_required()
         token = new_session_token("presentation", row.contest_id, ttl, {"credential_id": row.credential_id})
-        row.session_token_hash = token_hash(token)
         return {"access_token": token, "contest_id": row.contest_id, "expires_at": aware(row.expires_at).isoformat()}
 
 
@@ -105,7 +104,9 @@ def require_presentation(token: str | None, contest_id: str) -> None:
         raise authentication_required("프레젠테이션 전용 로그인이 필요합니다.")
     with SessionLocal() as db:
         row = db.get(PresentationAccountRow, contest_id)
+        # A display credential may be used by several screens at once. Its
+        # generation and expiry revoke every signed session when the account
+        # is reissued, disabled or expired, without displacing other screens.
         if (row is None or aware(row.expires_at) <= now_utc()
-                or row.credential_id != claims.get("credential_id")
-                or row.session_token_hash != token_hash(token)):
-            raise authentication_required("프레젠테이션 계정이 만료·해제되었거나 다른 기기에서 로그인했습니다.")
+                or row.credential_id != claims.get("credential_id")):
+            raise authentication_required("프레젠테이션 계정이 만료되었거나 사용 중지되었습니다.")

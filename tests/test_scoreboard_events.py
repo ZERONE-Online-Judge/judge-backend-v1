@@ -8,6 +8,7 @@ from app.database import engine, SessionLocal
 from app.orm_models import ContestRow
 from app.routers import presentation
 from app.services import scoreboard_events as events
+from app.services import presentation_access
 from app.services.errors import AppError
 from app.services.store import store
 from test_presentation_access import setup, client, login
@@ -92,6 +93,12 @@ def test_selected_divisions_are_filtered_before_scoreboards_are_computed(
 ):
     cid, did, _, staff, account = setup
     other = store.create_contest_division(cid, "B", "Other division").division_id
+    outside = store.create_contest('Unrelated presentation', 'Test', '')
+    outside_division = store.create_contest_division(outside.contest_id, 'C', 'Unrelated division').division_id
+    available = [
+        {'division_id': did, 'code': 'A', 'name': 'Division'},
+        {'division_id': other, 'code': 'B', 'name': 'Other division'},
+    ]
     display = {
         "Authorization": "Bearer "
         + login(account["email"]).json()["data"]["access_token"]
@@ -111,6 +118,8 @@ def test_selected_divisions_are_filtered_before_scoreboards_are_computed(
         calls.clear()
         response = client.get(endpoint, headers=headers, params=[("division_id", did)])
         assert response.status_code == 200
+        assert response.json()['data']['available_divisions'] == available
+        assert outside_division not in response.text
         assert [
             part["division"]["division_id"]
             for part in response.json()["data"]["sections"]
@@ -121,6 +130,7 @@ def test_selected_divisions_are_filtered_before_scoreboards_are_computed(
             endpoint, headers=headers, params=[("division_id", "missing")]
         )
         assert response.status_code == 200 and response.json()["data"]["sections"] == []
+        assert response.json()['data']['available_divisions'] == available
         assert calls == []
         response = client.get(
             endpoint,
@@ -131,6 +141,43 @@ def test_selected_divisions_are_filtered_before_scoreboards_are_computed(
             part["division"]["division_id"]
             for part in response.json()["data"]["sections"]
         } == {did, other}
+        assert response.json()['data']['available_divisions'] == available
+
+
+def test_display_streams_survive_other_logins_and_both_reauthenticate_on_revoke(setup, monkeypatch):
+    cid, _, _, _, account = setup
+    first = login(account['email']).json()['data']['access_token']
+    monkeypatch.setattr(events, 'AUTH_INTERVAL', 0.01)
+    monkeypatch.setattr(events, 'reveal_versions', lambda ids: {key: 'v1' for key in ids})
+
+    def authorize(token):
+        return lambda: presentation_access.require_presentation(token, cid)
+
+    async def run():
+        initial = events.scoreboard_events(Connected(), cid, authorize(first))
+        additional = None
+        try:
+            assert 'scoreboard_update' in await anext(initial)
+            # Log in another screen while the first screen's stream is open.
+            second = login(account['email']).json()['data']['access_token']
+            assert first != second
+            additional = events.scoreboard_events(Connected(), cid, authorize(second))
+            assert 'scoreboard_update' in await anext(additional)
+            for frame in await asyncio.wait_for(asyncio.gather(anext(initial), anext(additional)), 2):
+                assert 'scoreboard_update' in frame and 'reauthenticate' not in frame
+            presentation_access.revoke_account(cid)
+            for frame in await asyncio.wait_for(asyncio.gather(anext(initial), anext(additional)), 2):
+                assert frame == 'event: reauthenticate\ndata: {}\n\n'
+            for stream in (initial, additional):
+                with pytest.raises(StopAsyncIteration):
+                    await anext(stream)
+        finally:
+            await initial.aclose()
+            if additional is not None:
+                await additional.aclose()
+            assert not events.scoreboard_monitor().listeners
+
+    asyncio.run(run())
 
 
 @pytest.mark.parametrize("strategy,actions", [
