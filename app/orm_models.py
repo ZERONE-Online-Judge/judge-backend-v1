@@ -124,6 +124,10 @@ class ParticipantTeamRow(Base):
     access_block_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     access_blocked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     access_blocked_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    withdrawn: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    withdrawal_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    withdrawn_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    withdrawn_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
     members: Mapped[list[TeamMemberRow]] = relationship(cascade="all, delete-orphan", lazy="selectin")

@@ -126,6 +126,9 @@ jobs:
       - name: Verify participant access controls with PostgreSQL
         run: DATABASE_URL="$EDITOR_JUDGE_TEST_DATABASE_URL" python -m pytest -q tests/test_participant_access.py
 
+      - name: Verify team withdrawals with PostgreSQL
+        run: DATABASE_URL="$EDITOR_JUDGE_TEST_DATABASE_URL" python -m pytest -q tests/test_team_withdrawal.py
+
   playground-test:
     name: Playground Isolation
     runs-on: ubuntu-latest

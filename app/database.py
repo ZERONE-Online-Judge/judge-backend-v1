@@ -356,6 +356,16 @@ def create_schema() -> None:
                 ):
                     if name not in columns:
                         connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {declaration}"))
+        columns = {column["name"] for column in inspector.get_columns("participant_teams")}
+        with engine.begin() as connection:
+            for name, declaration in (
+                ("withdrawn", "BOOLEAN NOT NULL DEFAULT 0"),
+                ("withdrawal_reason", "TEXT"),
+                ("withdrawn_at", "DATETIME"),
+                ("withdrawn_by", "VARCHAR(255)"),
+            ):
+                if name not in columns:
+                    connection.execute(text(f"ALTER TABLE participant_teams ADD COLUMN {name} {declaration}"))
         if "judge_nodes" in inspector.get_table_names():
             columns = {column["name"] for column in inspector.get_columns("judge_nodes")}
             for name, declaration in [("allow_zoj", "BOOLEAN NOT NULL DEFAULT 1"), ("allow_editor", "BOOLEAN NOT NULL DEFAULT 1"), ("execution_capabilities", "JSON NOT NULL DEFAULT '[]'"), ("execution_revision", "VARCHAR(128)")]:

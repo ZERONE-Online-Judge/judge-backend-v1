@@ -123,6 +123,10 @@ class ParticipantTeam(BaseModel):
     access_block_reason: str | None = None
     access_blocked_at: datetime | None = None
     access_blocked_by: str | None = None
+    withdrawn: bool = False
+    withdrawal_reason: str | None = None
+    withdrawn_at: datetime | None = None
+    withdrawn_by: str | None = None
     members: list[TeamMember]
     created_at: datetime = Field(default_factory=now_utc)
 

@@ -128,6 +128,11 @@ class ParticipantAccessUpdateRequest(BaseModel):
     reason: str | None = Field(default=None, max_length=1000)
 
 
+class ParticipantWithdrawalUpdateRequest(BaseModel):
+    withdrawn: bool = Field(strict=True)
+    reason: str | None = Field(default=None, max_length=1000)
+
+
 class TeamMemberCreateRequest(BaseModel):
     name: str
     email: EmailStr
@@ -1066,6 +1071,17 @@ async def update_team_access(contest_id: str, participant_team_id: str, payload:
     return ok(request, {**team.model_dump(mode="json"), "division": division.model_dump(mode="json") if division else None})
 
 
+@router.patch("/operator/contests/{contest_id}/participants/{participant_team_id}/withdrawal")
+async def update_team_withdrawal(contest_id: str, participant_team_id: str, payload: ParticipantWithdrawalUpdateRequest, request: Request):
+    account = require_contest_staff(request, contest_id, "contest.participant.manage")
+    team = store.set_participant_withdrawal(contest_id, participant_team_id,
+        withdrawn=payload.withdrawn, reason=payload.reason, actor_email=str(account.email))
+    if not team:
+        raise not_found()
+    division = store.get_division(contest_id, team.division_id)
+    return ok(request, {**team.model_dump(mode="json"), "division": division.model_dump(mode="json") if division else None})
+
+
 @router.patch("/operator/contests/{contest_id}/participants/{participant_team_id}/members/{team_member_id}/access")
 async def update_member_access(contest_id: str, participant_team_id: str, team_member_id: str, payload: ParticipantAccessUpdateRequest, request: Request):
     account = require_contest_staff(request, contest_id, "contest.participant.manage")
@@ -1438,7 +1454,7 @@ async def operator_problems(contest_id: str, request: Request):
     teams = [
         team
         for team in store.teams.values()
-        if team.contest_id == contest_id and not team.team_name.startswith(OPERATOR_TEST_TEAM_PREFIX)
+        if team.contest_id == contest_id and not team.withdrawn and not team.team_name.startswith(OPERATOR_TEST_TEAM_PREFIX)
     ]
     total_teams_by_division: dict[str, int] = {}
     valid_team_ids: set[str] = set()

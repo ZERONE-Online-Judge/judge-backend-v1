@@ -235,6 +235,10 @@ def _team(row: ParticipantTeamRow) -> ParticipantTeam:
         access_block_reason=row.access_block_reason,
         access_blocked_at=_aware(row.access_blocked_at),
         access_blocked_by=row.access_blocked_by,
+        withdrawn=bool(row.withdrawn),
+        withdrawal_reason=row.withdrawal_reason,
+        withdrawn_at=_aware(row.withdrawn_at),
+        withdrawn_by=row.withdrawn_by,
         members=[
             TeamMember(
                 team_member_id=member.team_member_id,
@@ -259,6 +263,7 @@ def _participant_team(row: ParticipantTeamRow) -> ParticipantTeam:
     """Keep operator-only restriction metadata out of participant rosters."""
     team = _team(row)
     team.access_blocked_by = None
+    team.withdrawn_by = None
     for member in team.members:
         member.access_block_reason = None
         member.access_blocked_at = None
@@ -3553,6 +3558,57 @@ class DbStore:
             model = _team(team)
             return next(member for member in model.members if member.team_member_id == team_member_id) if team_member_id is not None else model
 
+    def set_participant_withdrawal(
+        self, contest_id: str, participant_team_id: str, *, withdrawn: bool,
+        reason: str | None, actor_email: str,
+    ) -> ParticipantTeam | None:
+        with self._session() as db:
+            # Serialize with release actions without blocking the key-share
+            # locks taken by team/member/submission foreign-key inserts. A
+            # stronger lock could invert Contest/Team against those writers.
+            contest = db.scalar(select(ContestRow).where(
+                ContestRow.contest_id == contest_id).with_for_update(key_share=True))
+            if not contest:
+                return None
+            team = db.scalar(select(ParticipantTeamRow).options(selectinload(ParticipantTeamRow.members)).where(
+                ParticipantTeamRow.contest_id == contest_id,
+                ParticipantTeamRow.participant_team_id == participant_team_id,
+            ).with_for_update().execution_options(populate_existing=True))
+            if not team:
+                return None
+            if bool(team.withdrawn) == withdrawn:
+                return _team(team)
+            team.withdrawn = withdrawn
+            team.withdrawal_reason = ((reason or "").strip() or None) if withdrawn else None
+            team.withdrawn_at = now_utc() if withdrawn else None
+            team.withdrawn_by = actor_email if withdrawn else None
+            release = db.get(ScoreboardReleaseRow, team.division_id)
+            if release is None:
+                # The revision also notifies connected presentation displays
+                # when no result announcement has been started yet.
+                release = ScoreboardReleaseRow(contest_id=contest_id,
+                    division_id=team.division_id, revision=0, mode="not_started")
+                db.add(release)
+            strategy = contest.scoreboard_release_mode or "manual"
+            if strategy not in {"immediate", "manual_all"}:
+                if release.mode == "all":
+                    # Keep already published results public. Rebuild contiguous
+                    # final ranks, including restored teams on cancellation.
+                    db.flush()
+                    board = self._scoreboard_rows_uncached(contest_id, team.division_id, _db=db)
+                    release.snapshot_rows = jsonable_encoder(board["rows"])
+                    release.revealed_ranks = sorted({row["rank"] for row in release.snapshot_rows})
+                    release.resolver_state = {"version": 2, "rows": release.snapshot_rows,
+                        "pending": [], "step": 0, "total_steps": 0, "last_event": None}
+                    release.undo_history = []
+                else:
+                    self._reset_scoreboard_release(release)
+                release.strategy = strategy
+            release.revision = (release.revision or 0) + 1
+            db.commit()
+            db.refresh(team)
+            return _team(team)
+
     def delete_participant_team(self, contest_id: str, participant_team_id: str) -> tuple[bool, str | None]:
         with self._session() as db:
             row = db.scalar(
@@ -4227,7 +4283,9 @@ class DbStore:
             member = db.scalar(select(TeamMemberRow).where(TeamMemberRow.contest_id == contest_id, TeamMemberRow.email == team_member_email))
             if not member:
                 raise ValueError("team member not registered")
-            team = db.get(ParticipantTeamRow, member.participant_team_id)
+            team = db.scalar(select(ParticipantTeamRow).where(
+                ParticipantTeamRow.participant_team_id == member.participant_team_id
+            ).with_for_update().execution_options(populate_existing=True))
             if not team or team.division_id != problem.division_id:
                 raise ValueError("division mismatch")
             require_participant_access(team, member)
@@ -4455,6 +4513,7 @@ class DbStore:
                 team_count = db.scalar(select(func.count()).select_from(ParticipantTeamRow).where(
                     ParticipantTeamRow.contest_id == contest_id,
                     ParticipantTeamRow.division_id == division_id,
+                    ParticipantTeamRow.withdrawn.is_(False),
                     ~ParticipantTeamRow.team_name.startswith(OPERATOR_TEST_TEAM_PREFIX),
                 )) or 0
                 return self._live_release_summary(strategy, release, team_count, include_undo=True)
@@ -4750,6 +4809,7 @@ class DbStore:
                     SubmissionRow.division_id == division_id,
                     SubmissionRow.submission_kind == "participant",
                     ~ParticipantTeamRow.team_name.startswith(OPERATOR_TEST_TEAM_PREFIX),
+                    ParticipantTeamRow.withdrawn.is_(False),
                     SubmissionRow.status.in_(["waiting", "preparing", "judging"]),
                 ).limit(1))
                 if pending:
@@ -4873,23 +4933,32 @@ class DbStore:
                 return None
             ended = self._scoreboard_ended(contest)
             release = db.get(ScoreboardReleaseRow, division_id) if public_view and division_id and ended else None
-            strategy = contest.scoreboard_release_mode or "manual"
+            release_identity = [release.mode, release.strategy, release.revision] if release else None
+            if public_view and division_id and not ended:
+                # Live serialized snapshots intentionally ignore submission
+                # generations. Withdrawal revisions are authorization policy,
+                # so they must also change both snapshot and previous keys.
+                current = db.execute(select(ScoreboardReleaseRow.mode,
+                    ScoreboardReleaseRow.strategy, ScoreboardReleaseRow.revision).where(
+                    ScoreboardReleaseRow.contest_id == contest_id,
+                    ScoreboardReleaseRow.division_id == division_id)).first()
+                release_identity = list(current) if current else None
             aggregate_releases = (db.execute(select(ScoreboardReleaseRow.division_id,
                 ScoreboardReleaseRow.mode, ScoreboardReleaseRow.revision).where(
                 ScoreboardReleaseRow.contest_id == contest_id).order_by(ScoreboardReleaseRow.division_id)).all()
-                if public_view and ended and strategy == "manual_all" and division_id is None else None)
+                if public_view and division_id is None else None)
             cutoff = self._public_scoreboard_cutoff(contest, now_utc(), release) if public_view else None
             identity = [PROBLEM_ORDER_POLICY, contest_id, division_id, public_view, ended, cutoff, settings.feature_public_scoreboard_penalty,
                         [contest.status, contest.start_at, contest.end_at, contest.freeze_at,
                          contest.scoreboard_freeze_mode, contest.scoreboard_frozen_at,
                          contest.scoreboard_release_mode, contest.freeze_submission_count_visible],
-                        [release.mode, release.strategy, release.revision] if release else None,
+                        release_identity,
                         [list(row) for row in aggregate_releases] if aggregate_releases is not None else None]
         return cached_result(f"scoreboard:{contest_id}", identity, settings.scoreboard_cache_ttl_seconds,
             compute, serialized=serialized, snapshot=serialized and not ended, compressed=response_division is not None)
 
-    def _scoreboard_rows_uncached(self, contest_id: str, division_id: str | None = None, public_view: bool = False, *, _cutoff_at: datetime | None = None) -> dict | None:
-        with self._session() as db:
+    def _scoreboard_rows_uncached(self, contest_id: str, division_id: str | None = None, public_view: bool = False, *, _cutoff_at: datetime | None = None, _db: Session | None = None) -> dict | None:
+        with borrowed_session(_db) if _db is not None else self._session() as db:
             contest = db.info.get("request_contest_policies", {}).get(contest_id) or db.get(ContestRow, contest_id)
             if not contest:
                 return None
@@ -4920,7 +4989,7 @@ class DbStore:
                 cutoff_at = None
                 public_filter = self._public_submission_filter(contest_id, None)
 
-            team_filters = [ParticipantTeamRow.contest_id == contest_id]
+            team_filters = [ParticipantTeamRow.contest_id == contest_id, ParticipantTeamRow.withdrawn.is_(False)]
             problem_filters = [ProblemRow.contest_id == contest_id]
             submission_filters = [
                 SubmissionRow.contest_id == contest_id,
@@ -4950,8 +5019,8 @@ class DbStore:
                 SubmissionRow.submission_id, SubmissionRow.participant_team_id,
                 SubmissionRow.problem_id, SubmissionRow.status, SubmissionRow.submitted_at,
             ).where(*submission_filters).order_by(SubmissionRow.submitted_at, SubmissionRow.submission_id)).all()
-            if excluded_team_ids:
-                submissions = [submission for submission in submissions if submission.participant_team_id not in excluded_team_ids]
+            eligible_team_ids = {team.participant_team_id for team in teams}
+            submissions = [submission for submission in submissions if submission.participant_team_id in eligible_team_ids]
 
             team_name_by_id = {team.participant_team_id: team.team_name for team in teams}
             problem_stats_by_id = {

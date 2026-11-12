@@ -5,6 +5,14 @@ from app.services.errors import AppError
 
 
 def require_participant_access(team, member) -> None:
+    if getattr(team, "withdrawn", False):
+        withdrawn_at = team.withdrawn_at
+        if withdrawn_at is not None and withdrawn_at.tzinfo is None:
+            withdrawn_at = withdrawn_at.replace(tzinfo=timezone.utc)
+        raise AppError(403, "participant_access_blocked",
+            "기권 처리된 팀은 이 대회에 접근할 수 없습니다. 운영진에게 문의해 주세요.",
+            {"scope": "team", "withdrawn": True, "reason": team.withdrawal_reason,
+             "blocked_at": withdrawn_at.isoformat() if withdrawn_at else None})
     for scope, target in (("team", team), ("member", member)):
         if target.access_blocked:
             blocked_at = target.access_blocked_at
