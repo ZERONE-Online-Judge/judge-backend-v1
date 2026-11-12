@@ -192,6 +192,28 @@ def test_access_controlled_app_routes_receive_generic_noindex_documents(html_cli
     assert "로그인" in metadata["description"]
 
 
+@pytest.mark.parametrize("path", [
+    "/presentation/login",
+    "/presentation/login/?contestId=private-contest&divisionId=private-division",
+])
+def test_presentation_login_serves_a_private_spa_document_without_resource_lookup(html_client, path):
+    _, _, public_store = html_client
+    def forbidden_lookup(*args, **kwargs):
+        raise AssertionError("Presentation login HTML must not read contest or account data")
+    public_store.get_public_contest = forbidden_lookup
+    response = request_page(html_client, path, follow_redirects=False)
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["x-robots-tag"] == seo.NOINDEX_ROBOTS
+    assert "location" not in response.headers
+    metadata = script_data(response.text, "zoj-seo-data")
+    assert metadata["path"] == "/presentation/login"
+    assert metadata["title"] == "프레젠테이션 연결 | ZOJ"
+    assert metadata["structured_data"] == []
+    assert "private-contest" not in response.text and "private-division" not in response.text
+    assert Document(response.text).select("script", src="/assets/index-hash.js")
+
+
 @pytest.mark.parametrize("path,canonical", [
     ("/support?tab=privacy", "https://zoj.kr/support/privacy"),
     ("/about/", "https://zoj.kr/about"),

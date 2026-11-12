@@ -240,6 +240,7 @@ def _not_found(path: str) -> dict:
 
 PRIVATE_PAGES = {
     "/login": "로그인",
+    "/presentation/login": "프레젠테이션 연결",
     "/editor/return": "에디터로 돌아가기",
     "/editor/account": "에디터 계정 보안",
     "/admin": "관리자 콘솔",
