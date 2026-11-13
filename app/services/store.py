@@ -98,6 +98,7 @@ from app.services.security import decode_session_token, hash_password, new_sessi
 from app.services.client_environment import classify_user_agent, decode_environment, describe_session, encode_environment, latest_descriptions
 from app.services.node_credentials import valid_node_credential
 from app.services.result_cache import cached_result
+from app import scoring
 from app.services import rejudging
 from app.services.storage import object_storage
 from app.services.mail_templates import (
@@ -182,6 +183,8 @@ def _contest(row: ContestRow, *, release_locked: bool | None = None) -> Contest:
         end_at=_aware(row.end_at),
         freeze_at=_aware(row.freeze_at),
         problem_access_after_end=ContestResourceAccess(row.problem_access_after_end or "private"),
+        scoring_mode=row.scoring_mode or "icpc",
+        scoring_mode_locked=scoring.mode_locked(db, row.contest_id) if db else False,
         scoreboard_public_during_contest=bool(row.scoreboard_public_during_contest),
         hide_participation_counts_before_start=bool(row.hide_participation_counts_before_start),
         presentation_freeze_alert_minutes=row.presentation_freeze_alert_minutes if row.presentation_freeze_alert_minutes is not None else default_alert_minutes(),
@@ -315,6 +318,8 @@ def _testcase_set(row: TestcaseSetRow) -> TestcaseSet:
         testcase_set_id=row.testcase_set_id,
         problem_id=row.problem_id,
         version=row.version,
+        subtasks=deepcopy(row.subtasks or []),
+        subtasks_locked=scoring.subtasks_locked(object_session(row), row.problem_id) if object_session(row) else False,
         is_active=row.is_active,
         created_at=_aware(row.created_at),
     )
@@ -374,6 +379,8 @@ def _submission(row: SubmissionRow, include_source: bool = True, *, staff_titles
         submitted_by_email=row.submitted_by_email,
         language=row.language,
         source_code=row.source_code if include_source else "",
+        scoring_mode=row.scoring_mode or "icpc",
+        score=row.score, max_score=row.max_score, subtask_results=deepcopy(row.subtask_results or []),
         status=SubmissionStatus(row.status),
         submitted_at=_aware(row.submitted_at),
         status_updated_at=_aware(row.status_updated_at),
@@ -750,6 +757,34 @@ class DbStore:
                 ProblemRow.division_id == division_id)).all()
             return [_problem(row) for row in sorted(rows, key=problem_code_sort_key)]
 
+    def participant_ioi_scores(self, contest_id: str, team_id: str | None, *, preview_email: str | None = None, division_id: str | None = None):
+        with self._session() as db:
+            contest = db.get(ContestRow, contest_id)
+            if not contest or contest.scoring_mode != "ioi":
+                return {}
+            problems = list(db.scalars(select(ProblemRow).where(ProblemRow.contest_id == contest_id)))
+            result = {}
+            for problem in problems:
+                active = db.scalar(select(TestcaseSetRow).where(TestcaseSetRow.problem_id == problem.problem_id,
+                    TestcaseSetRow.is_active.is_(True)))
+                result[problem.problem_id] = {"scoring_mode": "ioi", "score": 0, "max_score": 100,
+                    "subtasks": [{key: group[key] for key in ("subtask_id", "name", "points")}
+                        for group in active.subtasks or []] if active else []}
+            filters = [SubmissionRow.contest_id == contest_id]
+            if preview_email is not None:
+                filters += [SubmissionRow.submission_kind == "participant_preview", SubmissionRow.division_id == division_id,
+                    func.lower(SubmissionRow.submitted_by_email) == preview_email.lower()]
+            else:
+                filters += [SubmissionRow.participant_team_id == team_id, SubmissionRow.submission_kind == "participant"]
+            submissions = db.scalars(select(SubmissionRow).where(*filters)
+                .order_by(SubmissionRow.submitted_at, SubmissionRow.submission_id))
+            for submission in submissions:
+                if submission.problem_id in result:
+                    scoring.accumulate(result[submission.problem_id], {"score": submission.score,
+                        "subtask_results": submission.subtask_results})
+            return {pid: {key: value for key, value in item.items() if key in {"scoring_mode", "score", "max_score", "subtasks"}}
+                for pid, item in result.items()}
+
     def participant_solve_statuses(self, contest_id: str, team_id: str) -> dict[str, str]:
         with self._session() as db:
             pairs = db.execute(select(SubmissionRow.problem_id, SubmissionRow.status).where(
@@ -849,6 +884,7 @@ class DbStore:
                     SubmissionRow.progress_total,
                     SubmissionRow.runtime_ms,
                     SubmissionRow.memory_kb,
+                    SubmissionRow.scoring_mode, SubmissionRow.score, SubmissionRow.max_score, SubmissionRow.subtask_results,
                 )
             )
         with self._session() as db:
@@ -1390,6 +1426,7 @@ class DbStore:
                     SubmissionRow.progress_total,
                     SubmissionRow.runtime_ms,
                     SubmissionRow.memory_kb,
+                    SubmissionRow.scoring_mode, SubmissionRow.score, SubmissionRow.max_score, SubmissionRow.subtask_results,
                 )
             )
         with self._session() as db:
@@ -2574,15 +2611,19 @@ class DbStore:
         visibility: ContestVisibility = ContestVisibility.PUBLIC,
         visibility_after_end: ContestVisibility = ContestVisibility.PUBLIC,
         *,
+        scoring_mode: str = "icpc",
         presentation_freeze_alert_minutes: list[int] | None = None,
         presentation_end_alert_minutes: list[int] | None = None,
     ) -> Contest:
+        if scoring_mode not in scoring.SCORING_MODES:
+            raise AppError(422, "scoring_mode_invalid", "채점 방식은 ICPC 또는 IOI를 선택하세요.")
         default_start, default_end, default_freeze = demo_times()
         resolved_start = start_at or default_start
         resolved_end = end_at or (resolved_start + timedelta(hours=4))
         resolved_freeze = freeze_at or (resolved_end - timedelta(hours=1))
         with self._session() as db:
             row = ContestRow(
+                scoring_mode=scoring_mode,
                 title=title or f"{organization_name} Contest",
                 organization_name=organization_name,
                 overview=overview or f"{organization_name}에서 주최하는 대회입니다.",
@@ -3352,6 +3393,7 @@ class DbStore:
             "end_at",
             "freeze_at",
             "problem_access_after_end",
+            "scoring_mode",
             "scoreboard_public_during_contest",
             "hide_participation_counts_before_start",
             "presentation_freeze_alert_minutes",
@@ -3380,6 +3422,11 @@ class DbStore:
             if not row:
                 return None
             require_unchanged_ended_schedule(row, values)
+            if "scoring_mode" in values:
+                if values["scoring_mode"] not in scoring.SCORING_MODES:
+                    raise AppError(422, "scoring_mode_invalid", "채점 방식은 ICPC 또는 IOI를 선택하세요.")
+                if values["scoring_mode"] != row.scoring_mode and scoring.mode_locked(db, contest_id):
+                    raise AppError(409, "scoring_mode_locked", "제출 또는 결과 발표 기록이 있는 대회의 채점 방식은 변경할 수 없습니다.")
             for field in PRESENTATION_ALERT_FIELDS:
                 if field in values:
                     try:
@@ -3998,6 +4045,7 @@ class DbStore:
                 target_set = TestcaseSetRow(
                     problem_id=target_problem_id,
                     version=source_set.version,
+                    subtasks=deepcopy(source_set.subtasks or []),
                     is_active=source_set.is_active,
                 )
                 db.add(target_set)
@@ -4119,11 +4167,12 @@ class DbStore:
 
     def create_testcase_set(self, contest_id: str, problem_id: str, is_active: bool) -> TestcaseSet:
         with self._session() as db:
-            problem = db.get(ProblemRow, problem_id)
+            problem = db.scalar(select(ProblemRow).where(ProblemRow.problem_id == problem_id).with_for_update())
             if not problem or problem.contest_id != contest_id:
                 raise ValueError("problem not found")
             version = (db.scalar(select(func.max(TestcaseSetRow.version)).where(TestcaseSetRow.problem_id == problem_id)) or 0) + 1
             if is_active:
+                scoring.ensure_compatible(db, problem_id, [])
                 for existing in db.scalars(select(TestcaseSetRow).where(TestcaseSetRow.problem_id == problem_id)).all():
                     existing.is_active = False
             row = TestcaseSetRow(problem_id=problem_id, version=version, is_active=is_active)
@@ -4132,14 +4181,29 @@ class DbStore:
             db.refresh(row)
             return _testcase_set(row)
 
-    def update_testcase_set(self, contest_id: str, problem_id: str, testcase_set_id: str, is_active: bool | None = None) -> TestcaseSet | None:
+    def update_testcase_set(self, contest_id: str, problem_id: str, testcase_set_id: str,
+            is_active: bool | None = None, subtasks: list | None = None,
+            expected_subtasks: list | None = None) -> TestcaseSet | None:
         with self._session() as db:
-            problem = db.get(ProblemRow, problem_id)
+            problem = db.scalar(select(ProblemRow).where(ProblemRow.problem_id == problem_id).with_for_update())
             row = db.get(TestcaseSetRow, testcase_set_id)
             if not problem or problem.contest_id != contest_id or not row or row.problem_id != problem_id:
                 return None
+            contest = db.get(ContestRow, contest_id)
+            if expected_subtasks is not None and expected_subtasks != (row.subtasks or []):
+                raise AppError(409, "subtasks_conflict", "서브태스크 설정이 변경되었습니다. 새로고침한 뒤 다시 저장하세요.")
+            orders = list(db.scalars(select(TestcaseRow.display_order).where(TestcaseRow.testcase_set_id == testcase_set_id)))
+            if subtasks is not None:
+                normalized = scoring.normalize_subtasks(subtasks, orders)
+                if normalized and contest.scoring_mode != "ioi":
+                    raise AppError(422, "subtasks_require_ioi", "대회 설정에서 IOI 점수제를 선택한 뒤 서브태스크를 설정하세요.")
+                if normalized != (row.subtasks or []) and scoring.subtasks_locked(db, problem_id):
+                    raise AppError(409, "subtasks_locked", "참가자 제출이 있는 문제의 서브태스크 설정은 변경할 수 없습니다.")
+                row.subtasks = normalized
             if is_active is not None:
                 if is_active:
+                    scoring.normalize_subtasks(row.subtasks or [], orders)
+                    scoring.ensure_compatible(db, problem_id, row.subtasks)
                     for existing in db.scalars(select(TestcaseSetRow).where(TestcaseSetRow.problem_id == problem_id)).all():
                         existing.is_active = existing.testcase_set_id == testcase_set_id
                 else:
@@ -4166,6 +4230,8 @@ class DbStore:
             testcase_set = db.get(TestcaseSetRow, testcase_set_id)
             if not problem or problem.contest_id != contest_id or not testcase_set or testcase_set.problem_id != problem_id:
                 raise ValueError("testcase set not found")
+            if testcase_set.subtasks:
+                raise AppError(409, "subtasks_configured", "먼저 서브태스크 설정을 비운 뒤 테스트를 변경하고 배점을 다시 설정하세요.")
             row = TestcaseRow(
                 testcase_set_id=testcase_set_id,
                 display_order=display_order,
@@ -4193,6 +4259,7 @@ class DbStore:
             testcase_set = db.get(TestcaseSetRow, testcase_set_id)
             if not problem or problem.contest_id != contest_id or not testcase_set or testcase_set.problem_id != problem_id:
                 raise ValueError("testcase set not found")
+            scoring.normalize_subtasks(testcase_set.subtasks or [], [item["display_order"] for item in cases])
             old_cases = db.scalars(select(TestcaseRow).where(TestcaseRow.testcase_set_id == testcase_set_id)).all()
             old_keys = {(row.input_storage_key, row.output_storage_key) for row in old_cases}
             new_keys = {(item["input_storage_key"], item["output_storage_key"]) for item in cases}
@@ -4229,6 +4296,8 @@ class DbStore:
             row = db.get(TestcaseRow, testcase_id)
             if not problem or problem.contest_id != contest_id or not testcase_set or testcase_set.problem_id != problem_id or not row or row.testcase_set_id != testcase_set_id:
                 return None
+            if any(row.display_order in group["testcase_orders"] for group in testcase_set.subtasks or []):
+                raise AppError(409, "subtask_test_in_use", "서브태스크에 포함된 테스트입니다. 서브태스크 구성을 먼저 변경하세요.")
             item = _testcase(row)
             db.delete(row)
             db.commit()
@@ -4259,6 +4328,7 @@ class DbStore:
                     select(TestcaseSetRow).where(TestcaseSetRow.problem_id == problem_id).order_by(TestcaseSetRow.version.desc())
                 )
                 if fallback:
+                    scoring.ensure_compatible(db, problem_id, fallback.subtasks)
                     fallback.is_active = True
             db.commit()
             for input_key, output_key in deleted_keys:
@@ -4333,6 +4403,7 @@ class DbStore:
             require_participant_access(team, member)
             require_active_testcases(db, problem_id)
             submission = SubmissionRow(
+                scoring_mode=getattr(db.get(ContestRow, contest_id), "scoring_mode", "icpc") or "icpc",
                 contest_id=contest_id,
                 division_id=team.division_id,
                 problem_id=problem_id,
@@ -4431,6 +4502,7 @@ class DbStore:
                 raise ValueError("problem not found")
             require_active_testcases(db, problem_id)
             submission = SubmissionRow(
+                scoring_mode=getattr(db.get(ContestRow, contest_id), "scoring_mode", "icpc") or "icpc",
                 contest_id=contest_id,
                 division_id=problem.division_id,
                 problem_id=problem_id,
@@ -4471,6 +4543,7 @@ class DbStore:
             require_active_testcases(db, problem_id)
             require_allowed(problem, language)
             submission = SubmissionRow(
+                scoring_mode=getattr(db.get(ContestRow, contest_id), "scoring_mode", "icpc") or "icpc",
                 contest_id=contest_id,
                 division_id=problem.division_id,
                 problem_id=problem_id,
@@ -4640,12 +4713,17 @@ class DbStore:
                 "problem_code": scores[key]["problem_code"], "status": submission.status,
                 "submitted_at": submitted_at.isoformat(),
                 "elapsed_minutes": max(0, int((submitted_at - _aware(contest.start_at)).total_seconds() // 60)),
+                **({"score": submission.score, "subtask_results": submission.subtask_results,
+                    "submission_id": submission.submission_id} if contest.scoring_mode == "ioi" else {}),
             })
         return {"version": 2, "rows": rows, "pending": pending, "step": 0,
                 "total_steps": len({(event["team_id"], event["problem_id"]) for event in pending}), "last_event": None}
 
     @staticmethod
     def _rank_resolver_rows(rows: list[dict]) -> None:
+        if rows and rows[0].get("scoring_mode") == "ioi":
+            scoring.rank_rows(rows)
+            return
         def rank_key(row: dict) -> tuple:
             return (-row["solved"], row["penalty"], sum(score["attempts"] for score in row["problem_scores"] if not score["solved"]))
         rows.sort(key=lambda row: (
@@ -4699,7 +4777,12 @@ class DbStore:
         old_rank = row["rank"]
         penalty_statuses = {"wrong_answer", "runtime_error", "time_limit_exceeded", "memory_limit_exceeded", "output_limit_exceeded"}
         last_status = events[-1][1]["status"]
+        from_score = score.get("score", 0)
         for _, event in sorted(events, key=lambda item: item[1]["submitted_at"]):
+            if row.get("scoring_mode") == "ioi":
+                scoring.accumulate(score, event)
+                last_status = event["status"]
+                continue
             if score["solved"]:
                 break
             last_status = event["status"]
@@ -4714,6 +4797,9 @@ class DbStore:
             elif event["status"] in penalty_statuses:
                 score["attempts"] += 1
                 score["wrong_attempts"] += 1
+        if row.get("scoring_mode") == "ioi":
+            row["total_score"] = sum(cell.get("score", 0) for cell in row["problem_scores"])
+            row["solved"] = sum(cell["solved"] for cell in row["problem_scores"])
         # Post-AC attempts are consumed with their cell, never another step.
         row["submission_count"] += len(events)
         state["pending"] = [event for event in pending if (event["team_id"], event["problem_id"]) != (row["team_id"], score["problem_id"])]
@@ -4723,6 +4809,8 @@ class DbStore:
             "team_id": row["team_id"], "team_name": row["team_name"],
             "problem_code": score["problem_code"], "status": last_status,
             "from_rank": old_rank, "to_rank": row["rank"],
+            **({"from_score": from_score, "to_score": score["score"], "score_delta": score["score"] - from_score}
+                if row.get("scoring_mode") == "ioi" else {}),
         }
         release.resolver_state = state
         return inverse
@@ -4915,7 +5003,7 @@ class DbStore:
         if not settings.feature_public_scoreboard_penalty:
             row["penalty"] = None
         row["problem_scores"] = [{
-            **score, "penalty": None, "solved_at": None,
+            **{key: value for key, value in score.items() if key not in {"subtask_scores", "score_achieved_at"}}, "penalty": None, "solved_at": None,
             "best_submission_id": None, "best_submitted_at": None,
         } for score in sorted(original["problem_scores"], key=problem_code_sort_key)]
         return row
@@ -4955,7 +5043,7 @@ class DbStore:
                 # teams in frozen order. Never arrange hidden team identities
                 # using the final snapshot, even into empty ranking slots.
                 rows.sort(key=lambda row: (not row["rank_is_final"], row["rank"]))
-        return {"frozen": release.mode != "all", "rows": rows, "release": self._release_summary(release)}
+        return {"frozen": release.mode != "all", "rows": rows, "release": self._release_summary(release), "scoring_mode": contest.scoring_mode or "icpc"}
 
     def scoreboard_rows(self, contest_id: str, division_id: str | None = None, public_view: bool = False, *, _cutoff_at: datetime | None = None, serialized: bool = False, response_division=None) -> dict | str | None:
         compute = lambda: self._scoreboard_rows_uncached(contest_id, division_id, public_view, _cutoff_at=_cutoff_at)
@@ -4992,7 +5080,7 @@ class DbStore:
             cutoff = self._public_scoreboard_cutoff(contest, now_utc(), release) if public_view else None
             identity = [PROBLEM_ORDER_POLICY, contest_id, division_id, public_view, ended, cutoff, settings.feature_public_scoreboard_penalty,
                         [contest.status, contest.start_at, contest.end_at, contest.freeze_at,
-                         contest.scoreboard_freeze_mode, contest.scoreboard_frozen_at,
+                         contest.scoring_mode, contest.scoreboard_freeze_mode, contest.scoreboard_frozen_at,
                          contest.scoreboard_release_mode, contest.freeze_submission_count_visible],
                         release_identity,
                         [list(row) for row in aggregate_releases] if aggregate_releases is not None else None]
@@ -5050,7 +5138,7 @@ class DbStore:
                 ParticipantTeamRow.division_id).where(*team_filters).order_by(ParticipantTeamRow.team_name)).all()
             excluded_team_ids = {team.participant_team_id for team in teams if team.team_name.startswith(OPERATOR_TEST_TEAM_PREFIX)}
             teams = [team for team in teams if team.participant_team_id not in excluded_team_ids]
-            problems = sorted(db.execute(select(ProblemRow.problem_id, ProblemRow.problem_code)
+            problems = sorted(db.execute(select(ProblemRow.problem_id, ProblemRow.problem_code, ProblemRow.division_id)
                 .where(*problem_filters)).all(), key=problem_code_sort_key)
             divisions = {
                 row.division_id: _division(row)
@@ -5060,6 +5148,7 @@ class DbStore:
             submissions = db.execute(select(
                 SubmissionRow.submission_id, SubmissionRow.participant_team_id,
                 SubmissionRow.problem_id, SubmissionRow.status, SubmissionRow.submitted_at,
+                SubmissionRow.score, SubmissionRow.subtask_results,
             ).where(*submission_filters).order_by(SubmissionRow.submitted_at, SubmissionRow.submission_id)).all()
             eligible_team_ids = {team.participant_team_id for team in teams}
             submissions = [submission for submission in submissions if submission.participant_team_id in eligible_team_ids]
@@ -5204,10 +5293,12 @@ class DbStore:
                     row["team_name"],
                 )
             )
+            if contest.scoring_mode == "ioi":
+                scoring.project(rows, submissions, problems)
             previous_key = None
             current_rank = 0
             for index, row in enumerate(rows, start=1):
-                current_key = rank_key(row)
+                current_key = (row["total_score"],) if contest.scoring_mode == "ioi" else rank_key(row)
                 if current_key != previous_key:
                     current_rank = index
                     previous_key = current_key
@@ -5222,6 +5313,8 @@ class DbStore:
                         problem_score["solved_at"] = None
                         problem_score["best_submission_id"] = None
                         problem_score["best_submitted_at"] = None
+                        problem_score.pop("subtask_scores", None)
+                        problem_score.pop("score_achieved_at", None)
 
             if public_view and frozen and contest.freeze_submission_count_visible:
                 # Counts must depend only on received submissions, never on
@@ -5242,6 +5335,27 @@ class DbStore:
                 for row in rows:
                     for score in row["problem_scores"]:
                         score["pending_attempts"] = 0 if score["solved"] else hidden_counts.get((row["team_id"], score["problem_id"]), 0)
+
+            if contest.scoring_mode == "ioi":
+                for problem in problems:
+                    stats = problem_stats_by_id[problem.problem_id]
+                    stats["accepted_submissions"] = sum(
+                        submission.score == 100 for submission in submissions if submission.problem_id == problem.problem_id)
+                    stats["accepted_team_ids"] = {row["team_id"] for row in rows
+                        if any(cell["problem_id"] == problem.problem_id and cell.get("score") == 100 for cell in row["problem_scores"])}
+                    first = None
+                    cumulative = {}
+                    for submission in submissions:
+                        if submission.problem_id != problem.problem_id:
+                            continue
+                        cell = cumulative.setdefault(submission.participant_team_id, {"subtask_scores": []})
+                        scoring.accumulate(cell, {"score": submission.score, "subtask_results": submission.subtask_results})
+                        if cell.get("score") == 100 and first is None:
+                            first = submission
+                    stats["first_accepted_team_id"] = first.participant_team_id if first else None
+                    stats["first_accepted_team_name"] = team_name_by_id.get(first.participant_team_id) if first else None
+                    stats["first_accepted_at"] = _aware(first.submitted_at) if first else None
+                    stats["first_accepted_elapsed_minutes"] = max(0, int((_aware(first.submitted_at) - _aware(contest.start_at)).total_seconds() // 60)) if first else None
 
             problem_stats = []
             total_team_count = len(teams)
@@ -5273,7 +5387,7 @@ class DbStore:
                     }
                 )
 
-            result = {"frozen": frozen, "rows": rows}
+            result = {"frozen": frozen, "rows": rows, "scoring_mode": contest.scoring_mode or "icpc"}
             if not public_view:
                 result["problem_stats"] = problem_stats
             else:
@@ -5770,13 +5884,15 @@ class DbStore:
                 rows = db.scalars(
                     select(JudgeJobRow)
                     .join(SubmissionRow, SubmissionRow.submission_id == JudgeJobRow.submission_id)
+                    .outerjoin(ContestRow, ContestRow.contest_id == JudgeJobRow.contest_id)
+                    .where(or_(ContestRow.scoring_mode != "ioi", ContestRow.scoring_mode.is_(None)) if scoring.CAPABILITY not in (node.execution_capabilities or []) else True)
                     .where(JudgeJobRow.status == JudgeJobStatus.PENDING.value)
                     .where(JudgeJobRow.judge_job_id.not_in(scanned_ids))
                     .where(~full_verification if verification_execution.CAPABILITY not in (node.execution_capabilities or []) else True)
                     .where(SubmissionRow.language.in_(LANGUAGES if RUNTIME_CAPABILITY in (node.execution_capabilities or []) else [lang for lang in LANGUAGES if lang not in NEW_LANGUAGES]))
                     .order_by(sql_case((is_ai_trial, 2), (rejudging.is_job(), 1), else_=0), JudgeJobRow.queue_position)
                     .limit(safe_max_count - len(jobs))
-                    .with_for_update(skip_locked=True)
+                    .with_for_update(of=JudgeJobRow, skip_locked=True)
                 ).all()
                 if not rows:
                     break
@@ -5891,6 +6007,14 @@ class DbStore:
                             from app.services.verification_ai import snapshot_claim
                             snapshot_claim(db, submission, problem, active_set, testcase_rows)
                         collect_all = verification_execution.claim(db, submission, node, row, active_set, testcase_rows) if submission.submission_kind == "operator_test" else False
+                        scoring_mode = getattr(db.get(ContestRow, row.contest_id), "scoring_mode", "icpc") or "icpc"
+                        if submission.submission_kind == "verification_trial":
+                            # AI probes intentionally judge subsets/custom inputs; they
+                            # are never official scoring submissions or full-suite evidence.
+                            scoring_mode = "icpc"
+                        if scoring_mode == "ioi":
+                            scoring.attach(submission, active_set, testcase_rows, row.lease_token)
+                            collect_all = True
                         submission.status = SubmissionStatus.PREPARING.value
                         submission.status_updated_at = now_utc()
                         submission.compile_message = None
@@ -5902,6 +6026,7 @@ class DbStore:
                             {
                                 **_job(row).model_dump(mode="json"),
                                 "lease_token": row.lease_token,
+                                "scoring_mode": scoring_mode,
                                 "submission": _submission(submission).model_dump(mode="json"),
                                 "problem": _problem(problem).model_dump(mode="json") if problem else None,
                                 "testcase_set": _testcase_set(active_set).model_dump(mode="json") if active_set else None,
@@ -5936,6 +6061,9 @@ class DbStore:
         digest.update(str(problem.memory_limit_mb).encode("utf-8"))
         digest.update(json.dumps(problem.language_resource_limits or {}, sort_keys=True).encode("utf-8"))
         digest.update(testcase_set_id.encode("utf-8"))
+        with self._session() as scoring_db:
+            scoring_set = scoring_db.get(TestcaseSetRow, testcase_set_id)
+            digest.update(json.dumps(scoring_set.subtasks if scoring_set else [], sort_keys=True).encode())
         for case in testcase_rows:
             digest.update(case.testcase_id.encode("utf-8"))
             digest.update(case.input_sha256.encode("utf-8"))
@@ -5985,6 +6113,7 @@ class DbStore:
             "testcase_set": {
                 "testcase_set_id": testcase_set.testcase_set_id,
                 "version": testcase_set.version,
+                "subtasks": testcase_set.subtasks or [],
             },
             "testcases": [],
             "package_files": [],
@@ -6182,6 +6311,8 @@ class DbStore:
                 submission.failed_testcase_order = None
                 submission.progress_current = None
                 submission.progress_total = None
+                submission.score = None
+                submission.subtask_results = []
                 from app.services.verification_execution import requeue
                 requeue(db, submission.submission_id)
 
@@ -6224,7 +6355,8 @@ class DbStore:
                 return None
             rejudging_item = rejudging.item_for_job(db, job.judge_job_id)
             if rejudging_item:
-                rejudging.record_progress(rejudging_item, status, progress_current, progress_total)
+                rejudging.record_progress(rejudging_item, status, progress_current, progress_total,
+                    [testcase_result] if testcase_result is not None else testcase_results)
                 job.leased_at = now_utc()
                 db.commit()
                 return rejudging.candidate_submission(submission, rejudging_item), _job(job)
@@ -6235,8 +6367,11 @@ class DbStore:
                     raise TestcaseResultsInvalid("invalid_progress")
                 verification_execution.merge(execution, [testcase_result] if testcase_result is not None else (testcase_results or []))
                 progress_current, progress_total = len(execution.results), len(execution.testcases)
-            elif testcase_result is not None or testcase_results is not None:
+            elif submission.scoring_mode != "ioi" and (testcase_result is not None or testcase_results is not None):
                 raise TestcaseResultsInvalid("unrequested_results")
+            if submission.scoring_mode == "ioi":
+                completed = scoring.record(submission, [testcase_result] if testcase_result is not None else testcase_results)
+                progress_current, progress_total = completed, len(submission.scoring_snapshot["testcase_orders"])
             submission.status = status.value
             submission.progress_total = max(progress_total, 0) if progress_total is not None else None
             if progress_current is None:
@@ -6286,6 +6421,27 @@ class DbStore:
             from app.services import verification_execution
             candidate = db.scalar(select(JudgeJobRow).where(JudgeJobRow.judge_job_id == job_id).with_for_update())
             execution = db.get(verification_execution.Execution, candidate.submission_id) if candidate else None
+            finished_rejudge = rejudging.item_for_job(db, candidate.judge_job_id) if candidate else None
+            if candidate and candidate.status == JudgeJobStatus.SUCCEEDED.value and finished_rejudge:
+                node = db.get(JudgeNodeRow, candidate.assigned_node_id)
+                self._check_node_secret(node, node_secret)
+                snap = finished_rejudge.candidate_result.get("scoring_snapshot", {})
+                if snap.get("lease_token") != lease_token or finished_rejudge.candidate_result.get("status") != final_status.value:
+                    raise ValueError("lease mismatch")
+                rejudging.record_result(finished_rejudge, final_status, compile_message, judge_message,
+                    failed_testcase_order, runtime_ms, memory_kb, testcase_results)
+                db.commit()
+                return rejudging.candidate_submission(db.get(SubmissionRow, candidate.submission_id), finished_rejudge), _job(candidate)
+            if candidate and candidate.status == JudgeJobStatus.SUCCEEDED.value and not execution:
+                existing = db.get(SubmissionRow, candidate.submission_id)
+                if existing.scoring_mode == "ioi":
+                    node = db.get(JudgeNodeRow, candidate.assigned_node_id)
+                    self._check_node_secret(node, node_secret)
+                    if (existing.scoring_snapshot or {}).get("lease_token") != lease_token or existing.status != final_status.value:
+                        raise ValueError("lease mismatch")
+                    scoring.record(existing, testcase_results, final_status.value, failed_testcase_order)
+                    db.commit()
+                    return _submission(existing), _job(candidate)
             if candidate and execution and candidate.status == JudgeJobStatus.SUCCEEDED.value:
                 node = db.get(JudgeNodeRow, candidate.assigned_node_id)
                 self._check_node_secret(node, node_secret)
@@ -6306,7 +6462,7 @@ class DbStore:
             if rejudging_item:
                 rejudging.record_result(rejudging_item, final_status, compile_message, judge_message,
                     failed_testcase_order, runtime_ms if settings.feature_submission_runtime_metrics else None,
-                    memory_kb if settings.feature_submission_runtime_metrics else None)
+                    memory_kb if settings.feature_submission_runtime_metrics else None, testcase_results)
                 job.status = JudgeJobStatus.SUCCEEDED.value
                 job.lease_token = None
                 db.commit()
@@ -6316,8 +6472,12 @@ class DbStore:
                 metrics = verification_execution.summary(execution)
                 runtime_ms, memory_kb = metrics["runtime_ms"], metrics["memory_kb"]
                 submission.progress_current, submission.progress_total = len(execution.results), len(execution.testcases)
-            elif testcase_results is not None:
+            elif testcase_results is not None and submission.scoring_mode != "ioi":
                 raise TestcaseResultsInvalid("unrequested_results")
+            if submission.scoring_mode == "ioi":
+                completed = scoring.record(submission, testcase_results, final_status.value, failed_testcase_order)
+                submission.progress_current = completed
+                submission.progress_total = len(submission.scoring_snapshot["testcase_orders"])
             submission.status = final_status.value
             submission.compile_message = compile_message
             submission.judge_message = judge_message

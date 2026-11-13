@@ -271,6 +271,8 @@ def create_schema() -> None:
                     connection.execute(text("ALTER TABLE contests ADD COLUMN problem_access_after_end VARCHAR(32) DEFAULT 'private' NOT NULL"))
                 if "hide_participation_counts_before_start" not in columns:
                     connection.execute(text("ALTER TABLE contests ADD COLUMN hide_participation_counts_before_start BOOLEAN DEFAULT 0 NOT NULL"))
+                if "scoring_mode" not in columns:
+                    connection.execute(text("ALTER TABLE contests ADD COLUMN scoring_mode VARCHAR(16) NOT NULL DEFAULT 'icpc'"))
                 for alert_field in ("presentation_freeze_alert_minutes", "presentation_end_alert_minutes"):
                     if alert_field not in columns:
                         connection.execute(text(f"ALTER TABLE contests ADD COLUMN {alert_field} JSON DEFAULT '[30,20,10,5]' NOT NULL"))
@@ -411,3 +413,15 @@ def create_schema() -> None:
             if "awarded_score" in columns:
                 with engine.begin() as connection:
                     connection.execute(text("ALTER TABLE submissions DROP COLUMN awarded_score"))
+        for table, additions in {
+            "testcase_sets": {"subtasks": "JSON NOT NULL DEFAULT '[]'"},
+            "submissions": {"scoring_mode": "VARCHAR(16) NOT NULL DEFAULT 'icpc'",
+                "score": "INTEGER", "max_score": "INTEGER", "subtask_results": "JSON NOT NULL DEFAULT '[]'",
+                "scoring_snapshot": "JSON NOT NULL DEFAULT '{}'", "scoring_evidence": "JSON NOT NULL DEFAULT '[]'"},
+        }.items():
+            if table in inspector.get_table_names():
+                known = {column["name"] for column in inspect(engine).get_columns(table)}
+                with engine.begin() as connection:
+                    for name, kind in additions.items():
+                        if name not in known:
+                            connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {kind}"))

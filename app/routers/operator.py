@@ -147,6 +147,7 @@ class TeamMemberUpdateRequest(BaseModel):
 
 
 class ContestSettingsUpdateRequest(BaseModel):
+    scoring_mode: Literal["icpc", "ioi"] | None = None
     title: str | None = None
     organization_name: str | None = None
     overview: str | None = None
@@ -300,6 +301,8 @@ class TestcaseSetCreateRequest(BaseModel):
 
 class TestcaseSetUpdateRequest(BaseModel):
     is_active: bool | None = None
+    subtasks: list[dict] | None = Field(default=None, max_length=100)
+    expected_subtasks: list[dict] | None = Field(default=None, max_length=100)
 
 
 class TestcaseCreateRequest(BaseModel):

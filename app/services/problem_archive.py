@@ -17,6 +17,7 @@ from urllib.parse import unquote
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError, field_validator
+from app import scoring
 from app.problem_languages import ProblemStatements, validate_statement_fields
 from app.judge_languages import LANGUAGES, ProgrammingLanguages
 from sqlalchemy import func, select
@@ -131,6 +132,14 @@ class ArchiveSet(ArchiveModel):
     version: StrictInt = Field(ge=1, le=1_000_000)
     is_active: bool
     testcases: list[ArchiveCase] = Field(max_length=10000)
+    subtasks: list[scoring.Subtask] = Field(default_factory=list, max_length=100)
+
+    @model_serializer(mode="wrap")
+    def serialize(self, handler):
+        value = handler(self)
+        if not self.subtasks:
+            value.pop("subtasks", None)
+        return value
 
 
 class Manifest(ArchiveModel):
@@ -213,6 +222,7 @@ def _validate_references(manifest: Manifest):
     referenced = {asset.file for asset in manifest.assets}
     for item in manifest.testcase_sets:
         orders = [case.display_order for case in item.testcases]
+        scoring.normalize_subtasks([group.model_dump() for group in item.subtasks], orders)
         if len(set(orders)) != len(orders):
             raise invalid('한 테스트케이스 버전에 중복된 순서가 있습니다.')
         for case in item.testcases:
@@ -304,7 +314,7 @@ def summary(manifest: Manifest):
     return {'problem': manifest.problem.model_dump(), 'asset_count': len(manifest.assets),
             'file_count': len(manifest.files), 'total_bytes': sum(file.size for file in manifest.files),
             'example_count': examples, 'testcase_count': sum(len(item.testcases) for item in manifest.testcase_sets),
-            'testcase_sets': [{'version': item.version, 'is_active': item.is_active, 'count': len(item.testcases)} for item in manifest.testcase_sets],
+            'testcase_sets': [{'version': item.version, 'is_active': item.is_active, 'count': len(item.testcases), 'subtasks': [group.model_dump() for group in item.subtasks]} for item in manifest.testcase_sets],
             'assets': [{'filename': item.original_filename, 'category': item.category} for item in manifest.assets],
             'statement_languages': [manifest.problem.default_statement_language, *manifest.problem.statement_translations],
             'has_external_links': any(re.search(r'https?://', text) for text in problem_document_texts(manifest.problem))}
@@ -372,7 +382,7 @@ def export_archive(contest_id: str, problem_id: str, *, session=None):
                         'source_language': asset.source_language, 'asset_status': asset.asset_status, 'created_at': asset.created_at.isoformat()})
                 for item in sets:
                     cases = db.scalars(select(TestcaseRow).where(TestcaseRow.testcase_set_id == item.testcase_set_id).order_by(TestcaseRow.display_order)).all()
-                    exported = {'version': item.version, 'is_active': item.is_active, 'testcases': []}
+                    exported = {'version': item.version, 'is_active': item.is_active, 'testcases': [], 'subtasks': item.subtasks or []}
                     for index, case in enumerate(cases, 1):
                         exported['testcases'].append({'display_order': case.display_order,
                             'input': add_file(case.input_storage_key, f'testcases/v{item.version}/{index:05d}.in', case.input_sha256),
@@ -413,6 +423,8 @@ def import_archive(source, contest_id: str, division_id: str, problem_code: str,
             division = db.scalar(select(ContestDivisionRow).where(ContestDivisionRow.division_id == division_id, ContestDivisionRow.contest_id == contest_id).with_for_update())
             if not contest or contest.deleted_at is not None or not division:
                 raise not_found('참가 유형을 찾을 수 없습니다.')
+            if any(item.subtasks for item in manifest.testcase_sets) and contest.scoring_mode != 'ioi':
+                raise AppError(422, 'subtasks_require_ioi', '서브태스크가 있는 패키지입니다. 대회 설정에서 IOI 점수제를 선택하세요.')
             from app.services.store import _aware
             def ensure_unlocked():
                 now = now_utc()
@@ -439,6 +451,9 @@ def import_archive(source, contest_id: str, division_id: str, problem_code: str,
                 from app.services import package_updates
                 problem = package_updates.target(db, contest_id, update_context['problem_id'], lock=True)
                 package_updates.check_update(db, contest, problem, update_context)
+                for imported_set in manifest.testcase_sets:
+                    if imported_set.is_active:
+                        scoring.ensure_compatible(db, problem.problem_id, [group.model_dump() for group in imported_set.subtasks])
                 update_notice = package_updates.update_notice(contest, problem, manifest, update_context)
                 if not any(s.is_active and s.testcases for s in manifest.testcase_sets):
                     raise AppError(409, 'package_update_no_tests', '활성 테스트가 있는 패키지를 선택하세요.')
@@ -508,7 +523,8 @@ def import_archive(source, contest_id: str, division_id: str, problem_code: str,
                     mime_type=item.mime_type, file_size=file.size, sha256=file.sha256, source_language=item.source_language, asset_status=item.asset_status, created_at=created))
             for position, item in enumerate(sorted(manifest.testcase_sets, key=lambda s: s.version), 1):
                 set_id = str(uuid4())
-                db.add(TestcaseSetRow(testcase_set_id=set_id, problem_id=pid, version=version_base + position if update_context else item.version, is_active=item.is_active))
+                db.add(TestcaseSetRow(testcase_set_id=set_id, problem_id=pid, version=version_base + position if update_context else item.version, is_active=item.is_active,
+                    subtasks=[group.model_dump() for group in item.subtasks]))
                 db.flush()
                 for case in item.testcases:
                     db.add(TestcaseRow(testcase_set_id=set_id, display_order=case.display_order,

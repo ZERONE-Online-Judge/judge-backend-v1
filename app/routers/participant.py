@@ -53,8 +53,14 @@ def _problem_solve_statuses(contest_id: str, participant: dict | None) -> dict[s
     if not participant:
         return {}
     if participant.get("is_preview"):
-        return preview_solve_statuses(participant)
-    return store.participant_solve_statuses(contest_id, participant["team"].participant_team_id)
+        statuses = preview_solve_statuses(participant)
+        points = store.participant_ioi_scores(contest_id, None, preview_email=str(participant["member"].email),
+            division_id=participant["division"].division_id)
+    else:
+        statuses = store.participant_solve_statuses(contest_id, participant["team"].participant_team_id)
+        points = store.participant_ioi_scores(contest_id, participant["team"].participant_team_id)
+    return {pid: {**value, "solve_status": "accepted" if value["score"] == 100 else "partial" if value["score"] else statuses.get(pid, "unsolved")}
+        for pid, value in points.items()} if points else statuses
 
 
 def _problem_payload(problem, solve_statuses: dict[str, str], include_editorial: bool = False) -> dict:
@@ -62,7 +68,11 @@ def _problem_payload(problem, solve_statuses: dict[str, str], include_editorial:
     if not include_editorial:
         item["editorial"] = ""
         item["editorial_translations"] = {}
-    item["solve_status"] = solve_statuses.get(problem.problem_id, "unsolved")
+    state = solve_statuses.get(problem.problem_id, "unsolved")
+    if isinstance(state, dict):
+        item.update(state)
+    else:
+        item["solve_status"] = state
     return item
 
 

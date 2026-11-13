@@ -3,6 +3,7 @@ import asyncio
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.scoring import CAPABILITY as SUBTASK_CAPABILITY
 from app.models import JUDGE_FINAL_STATUSES, JUDGE_PROGRESS_STATUSES, SubmissionStatus
 from app.settings import settings
 from app.services.errors import AppError, not_found
@@ -27,7 +28,7 @@ class RegisterNodeRequest(NodeCredentialRequest):
     @field_validator("execution_capabilities")
     @classmethod
     def supported_capabilities(cls, value):
-        if any(item not in {"editor-execute-v1", editor_judging.FULL_VERIFICATION, editor_judging.REFERENCE_OUTPUT, verification_execution.CAPABILITY, "judge-icpc-languages-v1", "editor-icpc-languages-v1", "judge-zoj-runtime-v1", "editor-zoj-runtime-v1"} for item in value):
+        if any(item not in {"editor-execute-v1", editor_judging.FULL_VERIFICATION, editor_judging.REFERENCE_OUTPUT, verification_execution.CAPABILITY, SUBTASK_CAPABILITY, "judge-icpc-languages-v1", "editor-icpc-languages-v1", "judge-zoj-runtime-v1", "editor-zoj-runtime-v1"} for item in value):
             raise ValueError("Unsupported execution capability")
         return sorted(set(value))
 
@@ -59,7 +60,7 @@ class ResultRequest(NodeCredentialRequest):
     failed_testcase_order: int | None = None
     runtime_ms: int | None = None
     memory_kb: int | None = None
-    testcase_results: list[editor_judging.CaseResult] | None = Field(default=None, max_length=1000)
+    testcase_results: list[editor_judging.CaseResult] | None = Field(default=None, max_length=10000)
 
     @field_validator("final_status")
     @classmethod
@@ -75,7 +76,7 @@ class ProgressRequest(NodeCredentialRequest):
     progress_current: int | None = None
     progress_total: int | None = None
     testcase_result: editor_judging.CaseResult | None = None
-    testcase_results: list[editor_judging.CaseResult] | None = Field(default=None, max_length=1000)
+    testcase_results: list[editor_judging.CaseResult] | None = Field(default=None, max_length=10000)
 
     @field_validator("status")
     @classmethod

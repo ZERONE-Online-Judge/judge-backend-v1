@@ -97,18 +97,26 @@ def create_result(db, submission, job):
     problem = db.get(ProblemRow, submission.problem_id)
     code = problem.problem_code if problem else '문제'
     _emit(db, _authors(submission), f'submission:{job.judge_job_id}', 'submission', submission.contest_id,
-        f'{code}에 대한 제출 결과가 나왔습니다', LABELS.get(submission.status, submission.status),
+        f'{code}에 대한 제출 결과가 나왔습니다',
+        (f'{submission.score}/100점 · {LABELS.get(submission.status, submission.status)}'
+            if submission.scoring_mode == 'ioi' and submission.score is not None else LABELS.get(submission.status, submission.status)),
         _submission_href(submission), submission_id=submission.submission_id, problem_id=submission.problem_id,
         problem_code=code, new_status=submission.status, created_at=submission.status_updated_at)
 
 
 def create_rejudging(db, batch, item, submission, context):
-    if submission.submission_kind != 'participant' or item.original_result['status'] == submission.status:
+    if submission.submission_kind != 'participant' or all(
+        item.original_result.get(key) == getattr(submission, key) for key in ('status', 'score', 'subtask_results')):
         return
     code = context['problem']['problem_code']
     old, new = item.original_result['status'], submission.status
+    title = f'{code} 판정이 변경됐습니다'
+    body = f'{LABELS.get(old, old)} → {LABELS.get(new, new)}'
+    if submission.scoring_mode == 'ioi':
+        title = f'{code} 채점 결과가 변경됐습니다'
+        body = f'{item.original_result.get("score", 0)}/100점 → {submission.score}/100점 · 서브태스크 결과를 확인하세요.'
     _emit(db, _authors(submission), f'rejudging:{item.rejudging_item_id}', 'rejudging', batch.contest_id,
-        f'{code} 판정이 변경됐습니다', f'{LABELS.get(old, old)} → {LABELS.get(new, new)}',
+        title, body,
         _submission_href(submission), rejudging_item_id=item.rejudging_item_id,
         submission_id=submission.submission_id, problem_id=batch.problem_id, problem_code=code,
         old_status=old, new_status=new, reason=batch.reason, created_at=submission.status_updated_at)

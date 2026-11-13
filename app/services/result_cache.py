@@ -286,7 +286,7 @@ def _collect_changes(session, flush_context, instances):
         table = getattr(row, "__tablename__", "")
         if table in _BOARD_TABLES:
             if table == "submissions" and row in session.dirty:
-                scoring = {"status", "submitted_at", "participant_team_id", "problem_id", "division_id", "submission_kind"}
+                scoring = {"score", "subtask_results", "scoring_mode", "status", "submitted_at", "participant_team_id", "problem_id", "division_id", "submission_kind"}
                 if not any(inspect(row).attrs[name].history.has_changes() for name in scoring):
                     continue
             groups.add(f"scoreboard:{row.contest_id}")
@@ -305,7 +305,7 @@ def _collect_bulk_changes(state):
     if table in _BOARD_TABLES:
         values = getattr(state.statement, "_values", None)
         changed = {getattr(column, "key", str(column)) for column in values} if values else set()
-        scoring = {"status", "submitted_at", "participant_team_id", "problem_id", "division_id", "submission_kind", "contest_id"}
+        scoring = {"score", "subtask_results", "scoring_mode", "status", "submitted_at", "participant_team_id", "problem_id", "division_id", "submission_kind", "contest_id"}
         if table != "submissions" or state.is_delete or not changed or changed & scoring:
             target = state.statement.table
             if state.parameters:

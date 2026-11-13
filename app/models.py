@@ -144,6 +144,8 @@ class Contest(BaseModel):
     end_at: datetime
     freeze_at: datetime
     problem_access_after_end: ContestResourceAccess = ContestResourceAccess.PRIVATE
+    scoring_mode: Literal["icpc", "ioi"] = "icpc"
+    scoring_mode_locked: bool = False
     scoreboard_public_during_contest: bool = False
     hide_participation_counts_before_start: bool = False
     presentation_freeze_alert_minutes: AlertMinutes = Field(default_factory=default_alert_minutes)
@@ -225,6 +227,8 @@ class TestcaseSet(BaseModel):
     testcase_set_id: str = Field(default_factory=new_id)
     problem_id: str
     version: int
+    subtasks: list[dict] = Field(default_factory=list)
+    subtasks_locked: bool = False
     is_active: bool = False
     created_at: datetime = Field(default_factory=now_utc)
 
@@ -257,6 +261,10 @@ class Submission(BaseModel):
     submitted_by_email: str | None = None
     language: str
     source_code: str
+    scoring_mode: Literal["icpc", "ioi"] = "icpc"
+    score: int | None = None
+    max_score: int | None = None
+    subtask_results: list[dict] = Field(default_factory=list)
     status: SubmissionStatus = SubmissionStatus.WAITING
     submitted_at: datetime = Field(default_factory=now_utc)
     status_updated_at: datetime = Field(default_factory=now_utc)

@@ -25,6 +25,7 @@ def presentation_board(
         contest_data = {
             key: contest_data[key]
             for key in (
+                "scoring_mode",
                 "contest_id",
                 "title",
                 "status",

@@ -35,6 +35,7 @@ MAX_ARCHIVE = 512 * 1024**2
 MAX_CONTENT = 512 * 1024**2
 HASH = r"^[a-f0-9]{64}$"
 FULL_VERIFICATION = "editor-judge-full-v1"
+SUBTASKS = "zoj-judge-subtasks-v1"
 REFERENCE_OUTPUT = "editor-reference-output-v1"
 MAX_REFERENCE_OUTPUT_BYTES = 128 * 1024 * 1024
 MAX_CASE_OUTPUT_BYTES = 256 * 1024
@@ -92,6 +93,7 @@ class Snapshot(Strict):
     time_limit_ms: int = Field(ge=100, le=10000)
     memory_limit_mb: int = Field(ge=16, le=1024)
     collect_all_results: bool = False
+    scoring_mode: Literal["icpc", "ioi"] = "icpc"
     reference_output: bool = False
     language_resource_limits: dict[str, ResourceLimit] = Field(default_factory=dict, max_length=7)
 
@@ -139,6 +141,8 @@ def capabilities():
             "backend": "zoj", "runtime_revision": "zoj-judge-" + revision,
             "languages": list(DEFAULT_LANGUAGES),
             "full_suite_protocol": FULL_VERIFICATION,
+            "subtask_protocol": SUBTASKS,
+            "subtask_online_nodes": sum(SUBTASKS in (n.execution_capabilities or []) and FULL_VERIFICATION in (n.execution_capabilities or []) and RUNTIME_CAPABILITY in (n.execution_capabilities or []) and aware(n.last_heartbeat_at) >= now_utc() - timedelta(seconds=settings.judge_node_active_window_seconds) for n in nodes),
             "reference_output_protocol": REFERENCE_OUTPUT,
             "reference_output_online_nodes": sum(REFERENCE_OUTPUT in (n.execution_capabilities or []) and aware(n.last_heartbeat_at) >= now_utc() - timedelta(seconds=settings.judge_node_active_window_seconds) for n in nodes),
             "full_suite_online_nodes": sum(FULL_VERIFICATION in (n.execution_capabilities or []) and aware(n.last_heartbeat_at) >= now_utc() - timedelta(seconds=settings.judge_node_active_window_seconds) for n in nodes),
@@ -197,6 +201,11 @@ def create(email, source, fingerprint):
     except (ValueError, KeyError, UnicodeError, zipfile.BadZipFile, RuntimeError, ValidationError) as error:
         raise AppError(422, "editor_judge_snapshot_invalid", "채점 자료 형식·파일 무결성을 확인하세요.") from error
     caps = capabilities()
+    if snapshot.scoring_mode == "ioi":
+        if not snapshot.collect_all_results:
+            raise AppError(422, "editor_subtask_scope", "부분 점수 검증은 모든 테스트 결과를 수집해야 합니다.")
+        if not caps.get("subtask_online_nodes"):
+            raise AppError(503, "editor_subtask_unavailable", "부분 점수 검증용 ZOJ 채점 에이전트가 준비되지 않았습니다.")
     if snapshot.reference_output:
         if not snapshot.collect_all_results or len(snapshot.testcases) != 1:
             raise AppError(422, "editor_reference_scope", "정답 생성은 입력 한 개의 전체 출력을 수집하는 작업이어야 합니다.")
@@ -222,7 +231,7 @@ def create(email, source, fingerprint):
         if not existing and db.scalar(select(func.count()).select_from(Run).where(Run.status.in_(ACTIVE))) >= 256:
             raise AppError(429, "editor_judge_busy", "채점 대기열이 가득 찼습니다. 잠시 후 다시 요청하세요.")
         dataset_key = hashlib.sha256(json.dumps([
-            snapshot.project_id, snapshot.context_hash, snapshot.time_limit_ms, snapshot.memory_limit_mb, snapshot.reference_output,
+            snapshot.project_id, snapshot.context_hash, snapshot.time_limit_ms, snapshot.memory_limit_mb, snapshot.reference_output, snapshot.scoring_mode,
             {key: value.model_dump(exclude_none=True) for key,value in snapshot.language_resource_limits.items()},
             [c.model_dump() for c in sorted(snapshot.testcases, key=lambda c: c.index)],
             [r.model_dump() for r in sorted(snapshot.resources, key=lambda r: r.name)],
@@ -244,6 +253,7 @@ def create(email, source, fingerprint):
                                "time_limit_ms": snapshot.time_limit_ms, "memory_limit_mb": snapshot.memory_limit_mb,
                                "language_resource_limits": {key: value.model_dump(exclude_none=True) for key,value in snapshot.language_resource_limits.items()},
                                "collect_all_results": snapshot.collect_all_results,
+                               "scoring_mode": snapshot.scoring_mode,
                                "reference_output": snapshot.reference_output,
                                "bundle_key": bundle_key, "base_bundle_key": bundle_key, "excluded_orders": [],
                                "testcases": case_refs,
@@ -426,6 +436,8 @@ def claim_jobs(node_id, node_secret, max_count, session_factory=None):
             query = query.where(Run.payload["language"].as_string().not_in(NEW_LANGUAGES))
         if FULL_VERIFICATION not in (node.execution_capabilities or []):
             query = query.where(Run.payload["collect_all_results"].as_boolean().is_not(True))
+        if SUBTASKS not in (node.execution_capabilities or []):
+            query = query.where(Run.payload["scoring_mode"].as_string().is_distinct_from("ioi"))
         if REFERENCE_OUTPUT not in (node.execution_capabilities or []):
             query = query.where(Run.payload["reference_output"].as_boolean().is_not(True))
         rows = db.scalars(query.order_by(Run.created_at, Run.run_id).limit(min(max_count, settings.judge_claim_max_batch_size)).with_for_update(skip_locked=True)).all()
@@ -439,6 +451,7 @@ def claim_jobs(node_id, node_secret, max_count, session_factory=None):
                 "judge_job_id": row.run_id, "lease_token": row.lease_token,
                 "submission": {"submission_id": row.run_id, "submission_kind": "editor_verification", "language": payload["language"], "source_code": payload["source_code"]},
                 "collect_all_results": bool(payload.get("collect_all_results")),
+                "scoring_mode": payload.get("scoring_mode", "icpc"),
                 "reference_output": bool(payload.get("reference_output")),
                 "problem": agent_problem({"problem_id": row.project_id, "time_limit_ms": payload["time_limit_ms"], "memory_limit_mb": payload["memory_limit_mb"], "language_resource_limits": payload.get("language_resource_limits", {})}),
                 # The bundle is an optimization. Keep real per-object fallback
@@ -497,6 +510,8 @@ def merge_case_results(row, values, terminal=None):
             raise ValueError("lease mismatch: incomplete full-suite result")
         if complete:
             first = next((case for _, case in sorted(merged.items()) if case["final_status"] != "accepted"), None)
+            if row.payload.get("scoring_mode") == "ioi":
+                first = next((case for _, case in sorted(merged.items()) if case["final_status"] == "system_error"), first)
             if terminal["final_status"] != (first["final_status"] if first else "accepted") or terminal.get("failed_testcase_order") != (first["index"] if first else None):
                 raise ValueError("lease mismatch: aggregate differs from testcase results")
     for key, content in writes.items():

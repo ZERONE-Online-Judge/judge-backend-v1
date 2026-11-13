@@ -34,6 +34,7 @@ def reveal_versions(contest_ids):
                 select(
                     ContestRow.contest_id,
                     ContestRow.status,
+                    ContestRow.scoring_mode,
                     ContestRow.start_at,
                     ContestRow.end_at,
                     ContestRow.freeze_at,

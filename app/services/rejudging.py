@@ -15,6 +15,7 @@ from app.orm_models import (
     RejudgingRow as Batch, SubmissionRow, TestcaseRow, TestcaseSetRow,
     VerificationRunRow, VerificationTrialRow,
 )
+from app import scoring
 from app.services.errors import AppError
 from app.services.judging_inputs import require_active_testcases
 from app.services.storage import object_storage
@@ -22,6 +23,7 @@ from app.services.storage import object_storage
 RESULT_FIELDS = (
     "status", "compile_message", "judge_message", "failed_testcase_order",
     "runtime_ms", "memory_kb", "progress_current", "progress_total", "status_updated_at",
+    "scoring_mode", "score", "max_score", "subtask_results", "scoring_snapshot", "scoring_evidence",
 )
 FINAL = {value.value for value in JUDGE_FINAL_STATUSES}
 
@@ -66,7 +68,10 @@ def context_snapshot(db, problem_id):
             if f"/package-files/{role}/" in asset.storage_key:
                 files.append({**_asset(asset).model_dump(mode="json"), "role": role})
                 break
+    from app.orm_models import ContestRow
+    contest = db.get(ContestRow, problem.contest_id)
     context = {
+        "scoring_mode": getattr(contest, "scoring_mode", "icpc") or "icpc",
         "problem": _problem(problem).model_dump(mode="json"),
         "testcase_set": _testcase_set(active).model_dump(mode="json") if active else None,
         "testcases": [_testcase(case).model_dump(mode="json") for case in cases],
@@ -78,6 +83,8 @@ def context_snapshot(db, problem_id):
 def context_digest(context):
     # Editorial/display edits do not invalidate actual judge evidence.
     return digest({
+        "scoring_mode": context.get("scoring_mode", "icpc"),
+        "subtasks": (context.get("testcase_set") or {}).get("subtasks", []),
         "problem": {name: context["problem"].get(name) for name in (
             "problem_id", "time_limit_ms", "memory_limit_mb", "language_resource_limits",
         )},
@@ -228,8 +235,17 @@ def claim_payload(db, job, submission, item):
         case["output_url"] = object_storage.internal_presigned_get_url(case["output_storage_key"])
     for asset in context["package_files"]:
         asset["url"] = object_storage.internal_presigned_get_url(asset["storage_key"])
-    item.candidate_result = {"status": "preparing", "progress_current": 0,
+    item.candidate_result = {"scoring_mode": submission.scoring_mode or "icpc",
+        "score": None, "max_score": submission.max_score, "subtask_results": [],
+        "scoring_snapshot": {}, "scoring_evidence": [],
+        "status": "preparing", "progress_current": 0,
         "progress_total": len(context["testcases"]), "status_updated_at": now_utc().isoformat()}
+    if context.get("scoring_mode") == "ioi":
+        frozen = scoring.snapshot(SimpleNamespace(**context["testcase_set"]), context["testcases"])
+        item.candidate_result = {**item.candidate_result, "scoring_mode": "ioi", "score": None,
+            "max_score": 100, "subtask_results": [], "scoring_evidence": [],
+            "scoring_snapshot": {**frozen, "lease_token": job.lease_token}}
+        context["collect_all_results"] = True
     from app.services.store import _job
     return {**_job(job).model_dump(mode="json"), "lease_token": job.lease_token,
         "submission": candidate_submission(submission, item).model_dump(mode="json"),
@@ -249,8 +265,11 @@ def requeue(db, job):
     return False
 
 
-def record_progress(item, status, current, total):
+def record_progress(item, status, current, total, testcase_results=None):
     value = dict(item.candidate_result)
+    if value.get("scoring_mode") == "ioi":
+        value["scoring_evidence"] = scoring.merge_evidence(value["scoring_snapshot"], value.get("scoring_evidence"), testcase_results)
+        current, total = len(value["scoring_evidence"]), len(value["scoring_snapshot"]["testcase_orders"])
     value.update(status=status.value, progress_total=max(total, 0) if total is not None else None,
         status_updated_at=now_utc().isoformat())
     total = value["progress_total"]
@@ -259,8 +278,12 @@ def record_progress(item, status, current, total):
     item.candidate_result = value
 
 
-def record_result(item, status, compile_message, judge_message, failed_order, runtime_ms, memory_kb):
+def record_result(item, status, compile_message, judge_message, failed_order, runtime_ms, memory_kb, testcase_results=None):
     value = dict(item.candidate_result)
+    if value.get("scoring_mode") == "ioi":
+        value["scoring_evidence"] = scoring.merge_evidence(value["scoring_snapshot"], value.get("scoring_evidence"), testcase_results)
+        value["score"], value["subtask_results"] = scoring.calculate(value["scoring_snapshot"], value["scoring_evidence"], status.value, failed_order)
+        value["progress_current"] = len(value["scoring_evidence"])
     value.update(status=status.value, compile_message=compile_message, judge_message=judge_message,
         failed_testcase_order=failed_order, runtime_ms=max(runtime_ms, 0) if runtime_ms is not None else None,
         memory_kb=max(memory_kb, 0) if memory_kb is not None else None, status_updated_at=now_utc().isoformat())
@@ -274,10 +297,12 @@ def batch_summary(db, batch):
     from sqlalchemy import case
     state = Item.candidate_result["status"].as_string()
     old = Item.original_result["status"].as_string()
+    score_changed = Item.candidate_result["score"].as_integer().is_distinct_from(Item.original_result["score"].as_integer())
+    groups_changed = Item.candidate_result["subtask_results"].as_string().is_distinct_from(Item.original_result["subtask_results"].as_string())
     counts = db.execute(select(func.count(),
         func.sum(case((state.in_(FINAL), 1), else_=0)),
         func.sum(case((state == "system_error", 1), else_=0)),
-        func.sum(case((state.in_(FINAL) & (state != old), 1), else_=0)),
+        func.sum(case((state.in_(FINAL) & ((state != old) | score_changed | groups_changed), 1), else_=0)),
     ).where(Item.rejudging_id == batch.rejudging_id)).one()
     total, completed, errors, changed = (int(value or 0) for value in counts)
     status = batch.status
@@ -313,7 +338,8 @@ def detail(store, cid, bid, offset=0, limit=50):
         items = [{"submission_id": submission.submission_id, "language": submission.language,
             "submitted_at": submission.submitted_at, "submission_kind": submission.submission_kind,
             "original_result": item.original_result, "candidate_result": item.candidate_result,
-            "changed": item.candidate_result.get("status") in FINAL and item.original_result["status"] != item.candidate_result["status"],
+            "changed": item.candidate_result.get("status") in FINAL and any(
+                item.original_result.get(key) != item.candidate_result.get(key) for key in ("status", "score", "subtask_results")),
         } for item, submission in rows]
         summary = batch_summary(db, batch)
         return {**summary, "items": jsonable_encoder(items), "offset": offset, "limit": limit,

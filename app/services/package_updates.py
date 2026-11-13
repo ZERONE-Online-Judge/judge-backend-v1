@@ -63,7 +63,7 @@ def snapshot(db, problem, lock=False):
         TestcaseSetRow.problem_id == problem.problem_id, TestcaseSetRow.is_active.is_(True)
     ).order_by(TestcaseRow.display_order, TestcaseRow.testcase_id))
     state = {"problem": Problem.model_validate(problem, from_attributes=True).model_dump(mode="json"),
-        "sets": [(s.testcase_set_id, s.version, s.is_active) for s in sets],
+        "sets": [(s.testcase_set_id, s.version, s.is_active, s.subtasks or []) for s in sets],
         "assets": [(a.asset_id, a.storage_key, a.sha256, a.asset_status, a.source_language) for a in assets],
         "cases": [(c.testcase_id, c.display_order, c.input_sha256, c.output_sha256,
                    c.time_limit_ms_override, c.memory_limit_mb_override) for c in cases]}

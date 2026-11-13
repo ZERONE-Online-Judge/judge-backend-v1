@@ -125,6 +125,7 @@ def create_preview_submission(contest_id: str, problem_id: str, participant: dic
             raise ValueError("division mismatch")
         require_active_testcases(db, problem_id)
         submission = SubmissionRow(
+            scoring_mode=db.get(ContestRow, contest_id).scoring_mode or "icpc",
             contest_id=contest_id, division_id=problem.division_id, problem_id=problem_id,
             participant_team_id=None, team_member_id=None, submission_kind=PREVIEW_KIND,
             submitted_by_name=participant["member"].name, submitted_by_email=str(participant["member"].email),
