@@ -12,6 +12,7 @@ os.environ.setdefault("ALLOW_EMPTY_OTP", "true")
 from app.main import app
 from app.models import ContestResourceAccess, ContestStatus, now_utc
 from app.services.store import OPERATOR_TEST_TEAM_PREFIX, store
+from tests.contest_fixtures import set_contest_schedule
 
 client = TestClient(app)
 RESOURCE_PATHS = {
@@ -72,7 +73,7 @@ def test_visible_overview_has_safe_registration_counts_without_participant_acces
         start, end = now - timedelta(hours=1), now + timedelta(hours=2)
     else:
         start, end = now - timedelta(hours=4), now - timedelta(hours=1)
-    store.update_contest_settings(c["cid"], status=status, start_at=start, end_at=end, freeze_at=end - timedelta(hours=1))
+    set_contest_schedule(c["cid"], status=status, start_at=start, end_at=end, freeze_at=end - timedelta(hours=1))
     # Legacy operator test teams and virtual previews are not contestants.
     store.create_participant_team(c["cid"], c["divisions"][0].division_id, OPERATOR_TEST_TEAM_PREFIX + uuid4().hex, "Operator test", f"test-{uuid4().hex}@zoj.com", [])
     preview = store.upsert_contest_operator(c["cid"], f"preview-{uuid4().hex}@zoj.com", "Preview staff", ["participant_preview"])
@@ -108,7 +109,7 @@ def test_empty_visible_contest_has_zero_registration_counts():
 def test_hidden_contest_does_not_expose_overview_or_counts(contest_context, status):
     c = contest_context
     start = now_utc() + timedelta(days=1)
-    store.update_contest_settings(c["cid"], status=status, start_at=start, end_at=start + timedelta(hours=3), freeze_at=start + timedelta(hours=2))
+    set_contest_schedule(c["cid"], status=status, start_at=start, end_at=start + timedelta(hours=3), freeze_at=start + timedelta(hours=2))
     assert client.get(c["detail"]).status_code == 404
     assert c["cid"] not in {item["contest_id"] for item in client.get("/api/public/contests").json()["data"]}
 

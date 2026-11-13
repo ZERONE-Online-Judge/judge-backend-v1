@@ -1,4 +1,7 @@
+from datetime import datetime, timezone
+
 from app.models import ContestResourceAccess, ContestStatus, ContestVisibility, now_utc
+from app.services.errors import AppError
 
 
 RESOURCE_ACCESS_FIELDS = tuple(f"{resource}_access_after_end" for resource in (
@@ -54,7 +57,26 @@ def visible_private_contest_ids(token: str | None) -> set[str]:
 def contest_has_ended(contest) -> bool:
     if contest.status in {ContestStatus.DRAFT, ContestStatus.SCHEDULE_TBD}:
         return False
-    return contest.status in {ContestStatus.ENDED, ContestStatus.FINALIZED, ContestStatus.ARCHIVED} or now_utc() >= contest.end_at
+    return contest.status in {ContestStatus.ENDED, ContestStatus.FINALIZED, ContestStatus.ARCHIVED} or now_utc() >= _schedule_instant(contest.end_at)
+
+
+def _schedule_instant(value):
+    # SQLite returns naive UTC datetimes, while API models include timezones.
+    if isinstance(value, datetime) and value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
+def require_unchanged_ended_schedule(contest, updates: dict) -> None:
+    """Check the saved contest before applying a requested status or schedule."""
+    if not contest_has_ended(contest):
+        return
+    changed = [field for field in ("start_at", "freeze_at", "end_at")
+        if field in updates and _schedule_instant(updates[field]) != _schedule_instant(getattr(contest, field))]
+    if changed:
+        raise AppError(409, "contest_schedule_locked",
+            "종료된 대회의 시작·프리즈·종료 시각은 변경할 수 없습니다. 다른 설정은 변경할 수 있습니다.",
+            {"fields": changed})
 
 
 def contest_payload_for_view(contest, participant: dict | None = None) -> dict:

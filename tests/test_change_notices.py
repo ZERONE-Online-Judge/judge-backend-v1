@@ -77,12 +77,17 @@ def test_schedule_manager_can_confirm_emergency_without_notice_permission(contex
 
 
 @pytest.mark.parametrize("status", [ContestStatus.DRAFT, ContestStatus.SCHEDULED, ContestStatus.ENDED, ContestStatus.ARCHIVED])
-def test_unannounced_contests_save_schedule_without_notice(context, status):
+def test_unannounced_schedule_changes_do_not_create_notice(context, status):
     c = context
     store.update_contest_settings(c["cid"], status=status)
     result = client.patch(c["settings"], headers=c["headers"]["settings_manager"],
         json={"end_at": (c["contest"].end_at + timedelta(minutes=30)).isoformat()})
-    assert result.status_code == 200, result.text
+    if status in {ContestStatus.ENDED, ContestStatus.ARCHIVED}:
+        assert result.status_code == 409, result.text
+        assert result.json()["error"]["code"] == "contest_schedule_locked"
+        assert store.contests[c["cid"]].end_at == c["contest"].end_at
+    else:
+        assert result.status_code == 200, result.text
     assert notices(c) == []
 
 

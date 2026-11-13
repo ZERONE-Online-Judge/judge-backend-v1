@@ -8,6 +8,7 @@ from fastapi.encoders import jsonable_encoder
 from test_scoreboard_release_modes import race, client, login, public, release, set_mode
 from app.models import ContestStatus, now_utc
 from app.services.store import store
+from tests.contest_fixtures import set_contest_schedule
 
 
 def staff(race, role="notices_manager"):
@@ -41,7 +42,7 @@ def assert_participant_projection(response, expected):
 @pytest.mark.parametrize("counts", [False, True])
 def test_started_staff_receive_only_participant_scores_and_statistics(race, mode, ended, counts):
     set_mode(race, mode)
-    store.update_contest_settings(race["cid"], status=ContestStatus.ENDED if ended else ContestStatus.RUNNING,
+    set_contest_schedule(race["cid"], status=ContestStatus.ENDED if ended else ContestStatus.RUNNING,
         end_at=now_utc() - timedelta(minutes=1) if ended else now_utc() + timedelta(hours=1),
         freeze_submission_count_visible=counts)
     _, token = staff(race)
@@ -67,7 +68,7 @@ def test_started_staff_receive_only_participant_scores_and_statistics(race, mode
 @pytest.mark.parametrize("status", ["draft", "schedule_tbd", "open"])
 def test_staff_cannot_read_before_start_but_explicit_viewers_can(race, status):
     future = now_utc() + timedelta(days=2)
-    store.update_contest_settings(race["cid"], status=status, start_at=future,
+    set_contest_schedule(race["cid"], status=status, start_at=future,
         freeze_at=future + timedelta(hours=1), end_at=future + timedelta(hours=2))
     _, basic = staff(race)
     _, privileged = staff(race, "scoreboard_viewer")

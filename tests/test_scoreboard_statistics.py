@@ -7,6 +7,7 @@ from test_scoreboard_release_modes import race, client, public, release, set_mod
 from app.models import ContestStatus, now_utc
 from app.orm_models import ParticipantTeamRow, ProblemRow, SubmissionRow
 from app.services.store import OPERATOR_TEST_TEAM_PREFIX, store
+from tests.contest_fixtures import set_contest_schedule
 
 
 def problem_id(race, division=None):
@@ -135,7 +136,7 @@ def test_public_projections_keep_statistics_private_through_freeze_and_release(r
         assert internal["team_acceptance_rate"] == 100.0
         return board
 
-    store.update_contest_settings(race["cid"], status=ContestStatus.RUNNING,
+    set_contest_schedule(race["cid"], status=ContestStatus.RUNNING,
         end_at=now_utc() + timedelta(hours=1), freeze_at=now_utc() + timedelta(minutes=30))
     assert check()["frozen"] is False
     store.update_contest_settings(race["cid"], freeze_at=race["start"] + timedelta(hours=1))

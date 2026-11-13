@@ -10,6 +10,7 @@ from app.models import Contest, ContestStatus, now_utc
 from app.orm_models import ContestRow, ScoreboardReleaseRow, SubmissionRow, TeamMemberRow
 from app.services.scoreboard_events import reveal_versions
 from app.services.store import store
+from tests.contest_fixtures import set_contest_schedule
 from test_scoreboard_release_modes import (
     race, client, public, release, release_url, set_mode, visible_scores,
     assert_presentation_matches,
@@ -83,13 +84,13 @@ def test_ended_bulk_hold_protects_public_participant_staff_and_presentation(bulk
 
 @pytest.mark.parametrize("action", ["all", "undo"])
 def test_bulk_actions_refuse_before_contest_end(bulk, action):
-    store.update_contest_settings(bulk["cid"], status=ContestStatus.RUNNING, end_at=now_utc() + timedelta(hours=1))
+    set_contest_schedule(bulk["cid"], status=ContestStatus.RUNNING, end_at=now_utc() + timedelta(hours=1))
     response = client.post(release_url(bulk), headers=bulk["headers"], json={"action": action, "expected_revision": 0})
     assert response.status_code == 409
 
 
 def test_live_override_before_end_does_not_skip_the_ended_bulk_hold(bulk):
-    store.update_contest_settings(bulk["cid"], scoreboard_freeze_mode="live",
+    set_contest_schedule(bulk["cid"], scoreboard_freeze_mode="live",
         status=ContestStatus.RUNNING, end_at=now_utc() + timedelta(hours=1))
     running = public(bulk)
     assert not running["frozen"] and max(row["solved"] for row in running["rows"]) == 2

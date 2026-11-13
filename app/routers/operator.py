@@ -18,6 +18,7 @@ from app.services.access_logging import write_access_log
 from app.services.automatic_notices import time_update_notice_body
 from app.services.change_notices import ChangeNoticeRoute, allows_live_problem_change, confirm_change
 from app.services.contest_roles import ContestOperatorCreateRequest, ContestOperatorUpdateRequest, title_for_roles
+from app.services.contest_visibility import contest_has_ended, require_unchanged_ended_schedule
 from app.services.errors import AppError, not_found, permission_denied
 from app.services.mail_templates import absolute_url, operator_assignment_mail, render_branded_email
 from app.services.package_builder import PackageBuildError, package_role, is_editor_source_asset, testlib_header_assets
@@ -667,6 +668,10 @@ async def update_contest_settings(contest_id: str, payload: ContestSettingsUpdat
         )
         if not has_contest_permission(account, contest_id, permission):
             raise permission_denied()
+    # Reject before schedule auto-adjustment or change-notice preparation. The
+    # store repeats this check under its row lock against the current record.
+    require_unchanged_ended_schedule(contest, updates)
+    schedule_locked = contest_has_ended(contest)
     if _settings_update_changes_operation(contest, updates):
         _require_contest_mutation_open(contest_id)
 
@@ -689,10 +694,10 @@ async def update_contest_settings(contest_id: str, payload: ContestSettingsUpdat
     end_at = updates.get("end_at", contest.end_at)
     freeze_at = updates.get("freeze_at", contest.freeze_at)
 
-    # Allow practical schedule edits while contest is running/ended.
+    # Allow practical schedule edits before the contest ends.
     # If only one side of time range is edited and range becomes invalid,
     # keep existing duration when possible instead of hard-failing.
-    if start_at >= end_at:
+    if not schedule_locked and start_at >= end_at:
         current_duration = max(contest.end_at - contest.start_at, timedelta(hours=1))
         if explicit_start and not explicit_end:
             end_at = start_at + current_duration
@@ -703,7 +708,7 @@ async def update_contest_settings(contest_id: str, payload: ContestSettingsUpdat
         else:
             raise AppError(422, "validation_error", "start_at must be before end_at.")
 
-    if not (start_at <= freeze_at <= end_at):
+    if not schedule_locked and not (start_at <= freeze_at <= end_at):
         if explicit_freeze:
             raise AppError(422, "validation_error", "freeze_at must be between start_at and end_at.")
         # If freeze wasn't explicitly edited, auto-clamp to a sane point.

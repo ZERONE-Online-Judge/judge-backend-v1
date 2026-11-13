@@ -13,6 +13,7 @@ from app.main import app
 from app.models import ContestStatus, now_utc
 from app.orm_models import ParticipantTeamRow, ProblemRow, ScoreboardReleaseRow, SubmissionRow
 from app.services.store import store
+from tests.contest_fixtures import set_contest_schedule
 
 
 client = TestClient(app)
@@ -122,7 +123,7 @@ def test_immediate_waits_for_end_then_tracks_finishing_judges_without_snapshot(r
     set_mode(race, "immediate")
     did = race["divisions"][0]
     hidden = race["submissions"][did][("Blue", "B")]
-    store.update_contest_settings(race["cid"], status=ContestStatus.RUNNING, end_at=now_utc() + timedelta(hours=1))
+    set_contest_schedule(race["cid"], status=ContestStatus.RUNNING, end_at=now_utc() + timedelta(hours=1))
     before = public(race)
     assert before["frozen"] is True
     assert [row["solved"] for row in before["rows"]] == [1, 1, 1]
@@ -245,7 +246,7 @@ def test_release_strategy_rejects_incompatible_actions(race, mode, action):
 @pytest.mark.parametrize("action", ["start", "all"])
 def test_resolver_waits_until_ended_and_all_participant_jobs_finish(race, action):
     set_mode(race, "resolver")
-    store.update_contest_settings(race["cid"], status=ContestStatus.RUNNING, end_at=now_utc() + timedelta(hours=1))
+    set_contest_schedule(race["cid"], status=ContestStatus.RUNNING, end_at=now_utc() + timedelta(hours=1))
     response = client.post(release_url(race), headers=race["headers"], json={"action": action})
     assert response.status_code == 409
     store.update_contest_settings(race["cid"], status=ContestStatus.ENDED, end_at=now_utc() - timedelta(minutes=1))
@@ -410,7 +411,7 @@ def test_manual_freeze_before_scheduled_time_keeps_its_original_cutoff(race, mon
     store_module = importlib.import_module("app.services.store")
     tick = now_utc()
     did = race["divisions"][0]
-    store.update_contest_settings(race["cid"], status=ContestStatus.RUNNING,
+    set_contest_schedule(race["cid"], status=ContestStatus.RUNNING,
         freeze_at=tick + timedelta(minutes=30), end_at=tick + timedelta(hours=1))
     with store._session() as db:
         db.get(SubmissionRow, race["submissions"][did][("Blue", "B")]).submitted_at = tick + timedelta(minutes=1)

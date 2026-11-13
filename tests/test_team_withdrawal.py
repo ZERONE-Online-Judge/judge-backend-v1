@@ -15,6 +15,7 @@ from app.models import ContestStatus, now_utc
 from app.orm_models import OperationalAuditLogRow, ParticipantTeamRow, ScoreboardReleaseRow, SubmissionRow
 from app.services.scoreboard_events import reveal_versions
 from app.services.store import store
+from tests.contest_fixtures import set_contest_schedule
 from test_participant_access import context, login, set_access
 from test_performance_controls import cache
 from test_scoreboard_release_modes import race, client, public, release, release_url, set_mode
@@ -150,7 +151,7 @@ def test_every_board_projection_statistics_freeze_and_restoration(race, mode):
     assert dashboard_after['submission_count'] == dashboard_before['submission_count']
     assert reveal_versions({cid}) != version
     for ended, frozen in [(False, False), (False, True), (True, True)]:
-        store.update_contest_settings(cid, status=ContestStatus.ENDED if ended else ContestStatus.RUNNING,
+        set_contest_schedule(cid, status=ContestStatus.ENDED if ended else ContestStatus.RUNNING,
             end_at=now_utc() - timedelta(minutes=1) if ended else now_utc() + timedelta(hours=1),
             freeze_at=c['start'] + timedelta(hours=1) if frozen else now_utc() + timedelta(minutes=30))
         for division in [None, did]:
@@ -363,7 +364,7 @@ def test_live_serialized_snapshot_obeys_withdrawal_revision_in_same_time_bucket(
 
     cid, did = race['cid'], race['divisions'][0]
     tid = race['teams'][did]['Blue']
-    store.update_contest_settings(cid, status=ContestStatus.RUNNING,
+    set_contest_schedule(cid, status=ContestStatus.RUNNING,
         end_at=now_utc() + timedelta(hours=1))
     monkeypatch.setattr(settings, 'scoreboard_cache_ttl_seconds', 30)
     if not redis_enabled:

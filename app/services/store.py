@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session, joinedload, load_only, object_session, selec
 
 from app.database import SessionLocal, create_schema
 from app.services.request_sessions import after_commit, borrowed_session, current_session
-from app.services.contest_visibility import contest_is_public, contest_hidden_by_status, normalize_private_resources
+from app.services.contest_visibility import contest_is_public, contest_hidden_by_status, normalize_private_resources, require_unchanged_ended_schedule
 from app.services.errors import AppError, TestcaseResultsInvalid, permission_denied
 from app.services.participant_access import require_participant_access
 from app.services.judging_inputs import require_active_testcases, TEST_BASED_KINDS, QUEUED_TESTCASES_NOT_READY
@@ -3365,9 +3365,11 @@ class DbStore:
             "emergency_notice",
         }
         with self._session() as db:
-            row = db.scalar(select(ContestRow).where(ContestRow.contest_id == contest_id).with_for_update())
+            row = db.scalar(select(ContestRow).where(ContestRow.contest_id == contest_id)
+                .with_for_update().execution_options(populate_existing=True))
             if not row:
                 return None
+            require_unchanged_ended_schedule(row, values)
             next_release_mode = values.get("scoreboard_release_mode")
             if next_release_mode is not None and next_release_mode != (row.scoreboard_release_mode or "manual"):
                 if db.scalar(select(ScoreboardReleaseRow.division_id).where(ScoreboardReleaseRow.contest_id == contest_id, ScoreboardReleaseRow.mode != "not_started").limit(1)):
@@ -3379,6 +3381,10 @@ class DbStore:
                 if key in allowed and (
                     value is not None or key == "emergency_notice"
                 ):
+                    # An equivalent offset timestamp is a no-op. In particular,
+                    # SQLite must not persist its local clock as naive UTC.
+                    if key in {"start_at", "freeze_at", "end_at"} and _aware(value) == _aware(getattr(row, key)):
+                        continue
                     if isinstance(value, (ContestStatus, ContestVisibility, ContestResourceAccess, ScoreboardFreezeMode, ScoreboardReleaseMode)):
                         value = value.value
                     setattr(row, key, value)

@@ -11,6 +11,7 @@ from app.main import app
 from app.models import ContestStatus, ContestResourceAccess, now_utc
 from app.orm_models import ParticipantTeamRow, ProblemRow, SubmissionRow
 from app.services.store import store
+from tests.contest_fixtures import set_contest_schedule
 
 client = TestClient(app)
 
@@ -139,7 +140,7 @@ def test_release_validates_auth_scope_rank_and_start(ranking):
 def test_release_waits_for_end_and_pending_judging(ranking):
     contest, (division, _), submissions, headers = ranking
     endpoint = url(contest, division)
-    store.update_contest_settings(contest, status=ContestStatus.RUNNING, end_at=now_utc()+timedelta(hours=1))
+    set_contest_schedule(contest, status=ContestStatus.RUNNING, end_at=now_utc()+timedelta(hours=1))
     assert client.post(endpoint, headers=headers, json={'action':'start'}).status_code == 409
     store.update_contest_settings(contest, status=ContestStatus.ENDED, end_at=now_utc()-timedelta(hours=1))
     with store._session() as db:

@@ -17,6 +17,7 @@ from app.models import ContestStatus, now_utc
 from app.orm_models import ScoreboardReleaseRow, SubmissionRow
 from app.services.problem_order import PROBLEM_ORDER_POLICY, problem_code_sort_key
 from app.services.store import store
+from tests.contest_fixtures import set_contest_schedule
 from app.settings import settings
 from test_editor_bridge import KEY, headers as bridge_headers
 
@@ -156,7 +157,7 @@ def test_live_and_frozen_scoreboards_have_identical_code_order(contest, public_v
         changes = {"status": ContestStatus.RUNNING, "end_at": now_utc() + timedelta(hours=1)}
         if stage == "live":
             changes["freeze_at"] = now_utc() + timedelta(minutes=20)
-        store.update_contest_settings(contest["cid"], **changes)
+        set_contest_schedule(contest["cid"], **changes)
     board = store.scoreboard_rows(contest["cid"], contest["did"], public_view=public_view)
     assert codes(board["rows"][0]["problem_scores"]) == EXPECTED
     hidden = public_view and stage != "live"

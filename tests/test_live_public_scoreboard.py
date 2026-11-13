@@ -10,6 +10,7 @@ from alembic.operations import Operations
 
 from app.models import ContestStatus, now_utc
 from app.services.store import store
+from tests.contest_fixtures import set_contest_schedule
 from test_scoreboard_release_modes import race, client, settings_url
 
 
@@ -32,7 +33,7 @@ def test_access_matrix(race, enabled, archive, phase):
         changes['freeze_at'] = now+timedelta(minutes=30)
     elif phase == 'ended':
         changes.update(status=ContestStatus.ENDED, end_at=now-timedelta(minutes=1))
-    store.update_contest_settings(race['cid'], **changes)
+    set_contest_schedule(race['cid'], **changes)
     allowed = archive == 'public' if phase == 'ended' else enabled and phase in ['live', 'frozen']
     for path in paths(race):
         response = client.get(path)
@@ -43,7 +44,7 @@ def test_access_matrix(race, enabled, archive, phase):
 
 @pytest.mark.parametrize('counts', [False, True])
 def test_public_live_view_preserves_freeze_and_internal_results(race, counts):
-    store.update_contest_settings(race['cid'], status=ContestStatus.RUNNING,
+    set_contest_schedule(race['cid'], status=ContestStatus.RUNNING,
         end_at=now_utc()+timedelta(hours=1), scoreboard_public_during_contest=True,
         scoreboard_access_after_end='private', freeze_submission_count_visible=counts)
     public = client.get(paths(race)[1]).json()['data']
@@ -60,7 +61,7 @@ def test_public_live_view_preserves_freeze_and_internal_results(race, counts):
 
 
 def test_private_contest_remains_private_and_revocation_covers_wait_endpoints(race):
-    store.update_contest_settings(race['cid'], status=ContestStatus.RUNNING,
+    set_contest_schedule(race['cid'], status=ContestStatus.RUNNING,
         end_at=now_utc()+timedelta(hours=1), scoreboard_public_during_contest=True)
     for path in paths(race):
         assert client.get(path).status_code == 200

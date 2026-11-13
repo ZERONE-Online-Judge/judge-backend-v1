@@ -18,6 +18,7 @@ from app.orm_models import JudgeJobRow, SubmissionRow
 from app.services.store import store
 from app.services.storage import object_storage
 from tests.judging_fixtures import ensure_judging_inputs
+from tests.contest_fixtures import set_contest_schedule
 
 
 client = TestClient(app)
@@ -63,7 +64,7 @@ def first_contest_id() -> str:
 
 def set_contest_running(contest_id: str) -> None:
     now = datetime.now(timezone.utc)
-    store.update_contest_settings(
+    set_contest_schedule(
         contest_id,
         status=ContestStatus.RUNNING,
         start_at=now - timedelta(hours=1),
@@ -74,7 +75,7 @@ def set_contest_running(contest_id: str) -> None:
 
 def set_contest_mutable(contest_id: str) -> None:
     now = datetime.now(timezone.utc)
-    store.update_contest_settings(
+    set_contest_schedule(
         contest_id,
         status=ContestStatus.OPEN,
         start_at=now + timedelta(days=1),
@@ -2305,7 +2306,8 @@ def test_operator_updates_contest_settings_and_public_after_end_policy():
         headers=auth_headers(operator["access_token"]),
         json={"start_at": end_at.isoformat(), "end_at": start_at.isoformat()},
     )
-    assert invalid.status_code == 422
+    assert invalid.status_code == 409
+    assert invalid.json()["error"]["code"] == "contest_schedule_locked"
 
     restore_start = now - timedelta(hours=1)
     restore_end = now + timedelta(hours=3)
@@ -2325,7 +2327,14 @@ def test_operator_updates_contest_settings_and_public_after_end_policy():
             "emergency_notice": "제출 지연은 long polling 상태창에서 확인하세요.",
         },
     )
-    assert restored.status_code == 200
+    assert restored.status_code == 409
+    assert restored.json()["error"]["code"] == "contest_schedule_locked"
+    unchanged = store.get_contest(contest_id)
+    assert unchanged.status == ContestStatus.ENDED
+    assert unchanged.start_at == start_at
+    assert unchanged.freeze_at == freeze_at
+    assert unchanged.end_at == end_at
+    assert unchanged.problem_access_after_end.value == "public"
 
 
 def test_contest_status_is_normalized_from_schedule_updates():

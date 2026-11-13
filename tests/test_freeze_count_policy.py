@@ -12,6 +12,7 @@ from test_scoreboard_release_undo import undo
 from app.models import ContestStatus, now_utc
 from app.orm_models import ContestRow, ProblemRow, SubmissionRow, ScoreboardReleaseRow
 from app.services.store import store
+from tests.contest_fixtures import set_contest_schedule
 
 
 def cell(board, name="Green", code="B"):
@@ -35,7 +36,7 @@ def add_attempt(race, name, code, minute, status):
 @pytest.mark.parametrize("enabled", [False, True])
 def test_count_policy_across_modes_and_lifecycle(race, mode, ended, enabled):
     set_mode(race, mode)
-    store.update_contest_settings(race["cid"], freeze_submission_count_visible=enabled,
+    set_contest_schedule(race["cid"], freeze_submission_count_visible=enabled,
         status=ContestStatus.ENDED if ended else ContestStatus.RUNNING,
         end_at=now_utc() - timedelta(minutes=1) if ended else now_utc() + timedelta(hours=1))
     add_attempt(race, "Green", "B", 65, "wrong_answer")
@@ -121,7 +122,7 @@ def test_setting_toggles_cached_frozen_and_released_boards(race, mode):
 
 def test_before_freeze_live_override_and_exact_manual_freeze(race):
     future = now_utc() + timedelta(hours=1)
-    store.update_contest_settings(race["cid"], status=ContestStatus.RUNNING,
+    set_contest_schedule(race["cid"], status=ContestStatus.RUNNING,
         end_at=future + timedelta(hours=1), freeze_at=future)
     assert not public(race)["frozen"]
     assert "pending_attempts" not in str(public(race))

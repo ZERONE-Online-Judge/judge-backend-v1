@@ -11,6 +11,7 @@ from test_scoreboard_release_modes import (
 from app.models import ContestStatus, now_utc
 from app.orm_models import ScoreboardReleaseRow, SubmissionRow
 from app.services.store import store
+from tests.contest_fixtures import set_contest_schedule
 
 
 def undo(race, **kwargs):
@@ -181,7 +182,7 @@ def test_undo_requires_management_permission_and_ended_contest(race):
     body = {'action': 'undo', 'expected_revision': started['revision']}
     assert client.post(release_url(race), json=body).status_code == 401
     assert client.post(release_url(race), headers=viewer, json=body).status_code == 403
-    store.update_contest_settings(race['cid'], status=ContestStatus.RUNNING, end_at=now_utc()+timedelta(hours=1))
+    set_contest_schedule(race['cid'], status=ContestStatus.RUNNING, end_at=now_utc()+timedelta(hours=1))
     assert client.post(release_url(race), headers=race['headers'], json=body).status_code == 409
 
 
