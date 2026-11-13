@@ -164,13 +164,8 @@ def _valid_session_token(token: str, expected_type: str) -> bool:
     return decode_session_token(token, expected_type) is not None
 
 
-def _contest(row: ContestRow, *, release_locked: bool | None = None) -> Contest:
-    db = object_session(row)
-    if release_locked is None:
-        release_locked = bool(db and db.scalar(select(ScoreboardReleaseRow.division_id).where(
-            ScoreboardReleaseRow.contest_id == row.contest_id,
-            ScoreboardReleaseRow.mode != "not_started",
-        ).limit(1)))
+def _contest(row: ContestRow, *, release_locked: bool = False, scoring_locked: bool = False) -> Contest:
+    """Serialize explicitly projected flags without triggering database reads."""
     return Contest(
         contest_id=row.contest_id,
         title=row.title,
@@ -184,7 +179,7 @@ def _contest(row: ContestRow, *, release_locked: bool | None = None) -> Contest:
         freeze_at=_aware(row.freeze_at),
         problem_access_after_end=ContestResourceAccess(row.problem_access_after_end or "private"),
         scoring_mode=row.scoring_mode or "icpc",
-        scoring_mode_locked=scoring.mode_locked(db, row.contest_id) if db else False,
+        scoring_mode_locked=scoring_locked,
         scoreboard_public_during_contest=bool(row.scoreboard_public_during_contest),
         hide_participation_counts_before_start=bool(row.hide_participation_counts_before_start),
         presentation_freeze_alert_minutes=row.presentation_freeze_alert_minutes if row.presentation_freeze_alert_minutes is not None else default_alert_minutes(),
@@ -210,6 +205,38 @@ def _contest(row: ContestRow, *, release_locked: bool | None = None) -> Contest:
         emergency_notice_template=notice_template(row.emergency_notice),
         created_at=_aware(row.created_at),
     )
+
+
+def _contest_models(db: Session, rows) -> dict[str, Contest]:
+    """Project current lock flags in bounded queries, never once per DTO.
+
+    This is a read snapshot only. Mutation validators query the current rows
+    again under their own locks; no cross-request cache can authorize a write.
+    """
+    rows = list(rows)
+    by_id = {row.contest_id: row for row in rows}
+    if not by_id:
+        return {}
+    locked, released = set(), set()
+    ids = list(by_id)
+    for offset in range(0, len(ids), 500):
+        batch = ids[offset:offset + 500]
+        locked.update(db.scalars(select(SubmissionRow.contest_id).where(
+            SubmissionRow.contest_id.in_(batch)).distinct()))
+        released.update(db.scalars(select(ScoreboardReleaseRow.contest_id).where(
+            ScoreboardReleaseRow.contest_id.in_(batch), ScoreboardReleaseRow.mode != "not_started").distinct()))
+    return {cid: _contest(row, release_locked=cid in released, scoring_locked=cid in locked or cid in released)
+        for cid, row in by_id.items()}
+
+
+def _subtasks_locked_problem_ids(db: Session, problem_ids) -> set[str]:
+    ids = list(set(problem_ids))
+    locked = set()
+    for offset in range(0, len(ids), 500):
+        locked.update(db.scalars(select(SubmissionRow.problem_id).where(
+            SubmissionRow.problem_id.in_(ids[offset:offset + 500]),
+            SubmissionRow.submission_kind == "participant").distinct()))
+    return locked
 
 
 def _division(row: ContestDivisionRow) -> ContestDivision:
@@ -313,13 +340,13 @@ def _asset(row: ProblemAssetRow) -> ProblemAsset:
     )
 
 
-def _testcase_set(row: TestcaseSetRow) -> TestcaseSet:
+def _testcase_set(row: TestcaseSetRow, *, subtasks_locked: bool = False) -> TestcaseSet:
     return TestcaseSet(
         testcase_set_id=row.testcase_set_id,
         problem_id=row.problem_id,
         version=row.version,
         subtasks=deepcopy(row.subtasks or []),
-        subtasks_locked=scoring.subtasks_locked(object_session(row), row.problem_id) if object_session(row) else False,
+        subtasks_locked=subtasks_locked,
         is_active=row.is_active,
         created_at=_aware(row.created_at),
     )
@@ -734,17 +761,18 @@ class DbStore:
         with self._session() as db:
             found = db.execute(select(ContestRow, select(ScoreboardReleaseRow.division_id).where(
                 ScoreboardReleaseRow.contest_id == contest_id,
-                ScoreboardReleaseRow.mode != "not_started").exists())
+                ScoreboardReleaseRow.mode != "not_started").exists(),
+                select(SubmissionRow.submission_id).where(SubmissionRow.contest_id == contest_id).exists())
                 .where(ContestRow.contest_id == contest_id)).first()
             if not found:
                 return None
-            row, locked = found
+            row, locked, has_submissions = found
             status = _schedule_status(row.status, row.start_at, row.end_at, now_utc())
             if status != row.status:
                 row.status = status
                 db.commit()
             db.info.setdefault("request_contest_policies", {})[contest_id] = row
-            return _contest(row, release_locked=locked)
+            return _contest(row, release_locked=locked, scoring_locked=locked or has_submissions)
 
     def get_problem(self, problem_id: str) -> Problem | None:
         with self._session() as db:
@@ -816,7 +844,7 @@ class DbStore:
         self.refresh_contest_statuses()
         with self._session() as db:
             rows = db.scalars(select(ContestRow)).all()
-            return {row.contest_id: _contest(row) for row in rows}
+            return _contest_models(db, rows)
 
     def refresh_contest_statuses(self) -> None:
         now = now_utc()
@@ -897,7 +925,7 @@ class DbStore:
             return {}
         with self._session() as db:
             rows = db.scalars(select(ContestRow).where(ContestRow.contest_id.in_(ids))).all()
-            return {row.contest_id: _contest(row) for row in rows}
+            return _contest_models(db, rows)
 
     def divisions_by_ids(self, division_ids: list[str]) -> dict[str, ContestDivision]:
         ids = list(dict.fromkeys(division_ids))
@@ -1581,7 +1609,8 @@ class DbStore:
     def testcase_sets(self) -> dict[str, TestcaseSet]:
         with self._session() as db:
             rows = db.scalars(select(TestcaseSetRow)).all()
-            return {row.testcase_set_id: _testcase_set(row) for row in rows}
+            locked = _subtasks_locked_problem_ids(db, (row.problem_id for row in rows))
+            return {row.testcase_set_id: _testcase_set(row, subtasks_locked=row.problem_id in locked) for row in rows}
 
     @property
     def testcases(self) -> dict[str, Testcase]:
@@ -2050,6 +2079,13 @@ class DbStore:
             .where(func.lower(TeamMemberRow.email) == email.lower())
             .order_by(TeamMemberRow.name)
         ).all()
+        scopes = _staff(account).contest_scopes if account else {}
+        related_ids = {member.contest_id for member in members} | set(scopes)
+        contest_query = select(ContestRow).order_by(ContestRow.start_at)
+        if not account or not account.is_service_master:
+            contest_query = contest_query.where(ContestRow.contest_id.in_(related_ids))
+        contest_rows = {row.contest_id: row for row in db.scalars(contest_query)}
+        contest_models = _contest_models(db, contest_rows.values())
         display_name = ""
         for member in members:
             team = db.scalar(
@@ -2057,7 +2093,7 @@ class DbStore:
                 .options(selectinload(ParticipantTeamRow.members))
                 .where(ParticipantTeamRow.participant_team_id == member.participant_team_id)
             )
-            contest = db.get(ContestRow, member.contest_id)
+            contest = contest_rows.get(member.contest_id)
             division = db.get(ContestDivisionRow, team.division_id) if team else None
             if not team or not contest or not division:
                 continue
@@ -2070,7 +2106,7 @@ class DbStore:
                 continue
             participant_contests.append(
                 {
-                    "contest": _contest(contest).model_dump(mode="json"),
+                    "contest": contest_models[contest.contest_id].model_dump(mode="json"),
                     "team": team_model.model_dump(mode="json"),
                     "member": member_model.model_dump(mode="json"),
                     "division": _division(division).model_dump(mode="json"),
@@ -2085,15 +2121,15 @@ class DbStore:
             for contest_id, scope_list in sorted(scopes.items()):
                 if not scope_list:
                     continue
-                contest = db.get(ContestRow, contest_id)
+                contest = contest_rows.get(contest_id)
                 if not contest:
                     continue
-                operator_contests.append({"contest": _contest(contest).model_dump(mode="json"), "scopes": sorted(set(scope_list))})
+                operator_contests.append({"contest": contest_models[contest.contest_id].model_dump(mode="json"), "scopes": sorted(set(scope_list))})
             if account.is_service_master:
-                for contest in db.scalars(select(ContestRow).order_by(ContestRow.start_at)).all():
+                for contest in contest_rows.values():
                     if any(item["contest"]["contest_id"] == contest.contest_id for item in operator_contests):
                         continue
-                    operator_contests.append({"contest": _contest(contest).model_dump(mode="json"), "scopes": ["master"]})
+                    operator_contests.append({"contest": contest_models[contest.contest_id].model_dump(mode="json"), "scopes": ["master"]})
             if issue_operator_session:
                 operator_session = {
                     "access_token": "",
@@ -2569,7 +2605,7 @@ class DbStore:
                     )
                 )
             ).all()
-            contests = [_contest(row) for row in rows]
+            contests = list(_contest_models(db, rows).values())
             return [contest for contest in contests if contest_is_public(contest) or contest.contest_id in (visible_private_ids or set())]
 
     def get_public_contest(self, contest_id: str, *, allow_private: bool = False) -> Contest | None:
@@ -2640,7 +2676,7 @@ class DbStore:
             db.add(row)
             db.commit()
             db.refresh(row)
-            return _contest(row)
+            return _contest(row, release_locked=False, scoring_locked=False)
 
     def create_contest_division(self, contest_id: str, code: str, name: str, description: str = "", display_order: int = 1) -> ContestDivision:
         with self._session() as db:
@@ -3460,7 +3496,7 @@ class DbStore:
             row.status = _schedule_status(row.status, row.start_at, row.end_at, now_utc())
             db.commit()
             db.refresh(row)
-            return _contest(row)
+            return _contest_models(db, [row])[row.contest_id]
 
     def contest_divisions(self, contest_id: str) -> list[ContestDivision]:
         with self._session() as db:
@@ -4179,7 +4215,7 @@ class DbStore:
             db.add(row)
             db.commit()
             db.refresh(row)
-            return _testcase_set(row)
+            return _testcase_set(row, subtasks_locked=scoring.subtasks_locked(db, problem_id))
 
     def update_testcase_set(self, contest_id: str, problem_id: str, testcase_set_id: str,
             is_active: bool | None = None, subtasks: list | None = None,
@@ -4210,7 +4246,7 @@ class DbStore:
                     row.is_active = False
             db.commit()
             db.refresh(row)
-            return _testcase_set(row)
+            return _testcase_set(row, subtasks_locked=scoring.subtasks_locked(db, problem_id))
 
     def add_testcase(
         self,
@@ -4319,7 +4355,7 @@ class DbStore:
             for case in cases:
                 deleted_keys.append((case.input_storage_key, case.output_storage_key))
                 db.delete(case)
-            item = _testcase_set(row)
+            item = _testcase_set(row, subtasks_locked=scoring.subtasks_locked(db, problem_id))
             was_active = bool(row.is_active)
             db.delete(row)
             db.flush()
@@ -4356,6 +4392,7 @@ class DbStore:
                 .order_by(TestcaseSetRow.version)
             ).all()
             result = []
+            locked = scoring.subtasks_locked(db, problem_id)
             for testcase_set in sets:
                 cases = db.scalars(
                     select(TestcaseRow)
@@ -4379,7 +4416,7 @@ class DbStore:
                     testcases = [_testcase(case).model_dump(mode="json") for case in cases]
                 result.append(
                     {
-                        **_testcase_set(testcase_set).model_dump(mode="json"),
+                        **_testcase_set(testcase_set, subtasks_locked=locked).model_dump(mode="json"),
                         "testcases": testcases,
                     }
                 )
