@@ -552,6 +552,7 @@ def operator_audit_logs(
     logs, next_cursor, total_count = store.list_operational_audit_logs(
         contest_id=contest_id,
         actor_email=actor_email or None,
+        exclude_service_master=True,
         limit=limit,
         cursor=cursor,
     )

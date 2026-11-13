@@ -527,7 +527,7 @@ def import_archive(source, contest_id: str, division_id: str, problem_code: str,
                 if not editor_context.get("skip_audit"):
                     db.add(OperationalAuditLogRow(scope="operator", action="Editor 패키지 업데이트" if update_context else "Editor 문제 가져오기", method="POST",
                         path=editor_context.get('path', f"/api/editor/contests/{contest_id}/problems/{pid}/package-updates" if update_context else f"/api/editor/contests/{contest_id}/imports"), status_code=200, actor_email=account.email,
-                        actor_name=account.display_name, actor_role="마스터" if account.is_service_master else title_for_roles(account.contest_roles.get(contest_id, [])), contest_id=contest_id, request_id=editor_context["request_id"],
+                        actor_name=account.display_name, actor_role="service_master" if account.is_service_master else title_for_roles(account.contest_roles.get(contest_id, [])), contest_id=contest_id, request_id=editor_context["request_id"],
                         details=json.dumps({"problem_id": pid, "title": problem.title, "problem_code": code,
                             "target": {"problem_title": problem.title, "problem_code": code},
                             "division_id": division_id, "testcase_count": sum(len(s.testcases) for s in manifest.testcase_sets),

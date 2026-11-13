@@ -1021,6 +1021,7 @@ class DbStore:
         scope: str | None = None,
         contest_id: str | None = None,
         actor_email: str | None = None,
+        exclude_service_master: bool = False,
         limit: int = 100,
         cursor: str | None = None,
     ) -> tuple[list[OperationalAuditLog], str | None, int]:
@@ -1036,6 +1037,25 @@ class DbStore:
             filters.append(OperationalAuditLogRow.contest_id == contest_id)
         if actor_email:
             filters.append(OperationalAuditLogRow.actor_email == actor_email.strip().lower())
+        if exclude_service_master:
+            role = func.coalesce(OperationalAuditLogRow.actor_role, "")
+            # Older Editor imports used the same localized title for contest
+            # masters and service masters. Only that ambiguous legacy title
+            # needs an account lookup; explicit recorded roles stay stable.
+            legacy_service_master = (
+                select(StaffAccountRow.staff_account_id)
+                .where(
+                    StaffAccountRow.is_service_master.is_(True),
+                    func.lower(func.trim(StaffAccountRow.email))
+                    == func.lower(func.trim(OperationalAuditLogRow.actor_email)),
+                )
+                .correlate(OperationalAuditLogRow)
+                .exists()
+            )
+            filters.extend([
+                role != "service_master",
+                or_(role != "마스터", ~legacy_service_master),
+            ])
 
         base = select(OperationalAuditLogRow)
         count_stmt = select(func.count()).select_from(OperationalAuditLogRow)
