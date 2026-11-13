@@ -2661,6 +2661,7 @@ class DbStore:
         visibility_after_end: ContestVisibility = ContestVisibility.PUBLIC,
         *,
         scoring_mode: str = "icpc",
+        freeze_submission_count_visible: bool = True,
         presentation_freeze_alert_minutes: list[int] | None = None,
         presentation_end_alert_minutes: list[int] | None = None,
     ) -> Contest:
@@ -2673,6 +2674,7 @@ class DbStore:
         with self._session() as db:
             row = ContestRow(
                 scoring_mode=scoring_mode,
+                freeze_submission_count_visible=freeze_submission_count_visible,
                 title=title or f"{organization_name} Contest",
                 organization_name=organization_name,
                 overview=overview or f"{organization_name}에서 주최하는 대회입니다.",

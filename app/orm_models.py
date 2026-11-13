@@ -42,7 +42,7 @@ class ContestRow(Base):
     scoreboard_release_mode: Mapped[str] = mapped_column(String(32), default="resolver", server_default="resolver")
     scoreboard_frozen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     mock_judging_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
-    freeze_submission_count_visible: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    freeze_submission_count_visible: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
     participant_progress_visible: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     mock_judging_progress_visible: Mapped[bool] = mapped_column(Boolean, default=False)
     emergency_notice: Mapped[str | None] = mapped_column(Text, nullable=True)

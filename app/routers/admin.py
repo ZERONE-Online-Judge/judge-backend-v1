@@ -73,6 +73,7 @@ def _submission_queue_position(submission_id: str, jobs: dict | None = None) -> 
 
 class ContestCreateRequest(BaseModel):
     scoring_mode: Literal["icpc", "ioi"] = "icpc"
+    freeze_submission_count_visible: bool = True
     title: str | None = None
     organization_name: str
     overview: str | None = None
@@ -197,6 +198,7 @@ async def create_contest(payload: ContestCreateRequest, request: Request):
         payload.freeze_at,
         payload.status,
         scoring_mode=payload.scoring_mode,
+        freeze_submission_count_visible=payload.freeze_submission_count_visible,
         visibility=payload.visibility,
         visibility_after_end=payload.visibility_after_end,
         presentation_freeze_alert_minutes=payload.presentation_freeze_alert_minutes,
