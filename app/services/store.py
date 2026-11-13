@@ -425,6 +425,19 @@ def _normalize_source_code(source_code: str) -> str:
     return source_code.replace("\r\n", "\n").replace("\r", "\n")
 
 
+def _submission_context(db: Session, contest_id: str, problem_id: str):
+    # Settings and subtask changes take FOR UPDATE on these rows. Shared key
+    # locks keep the first submission's mode/configuration current until its
+    # insert commits without serializing submissions from different teams.
+    contest = db.scalar(select(ContestRow).where(ContestRow.contest_id == contest_id)
+        .with_for_update(read=True, key_share=True).execution_options(populate_existing=True))
+    problem = db.scalar(select(ProblemRow).where(ProblemRow.problem_id == problem_id)
+        .with_for_update(read=True, key_share=True).execution_options(populate_existing=True))
+    if not contest or not problem or problem.contest_id != contest_id:
+        raise ValueError("problem not found")
+    return contest, problem
+
+
 def _job(row: JudgeJobRow) -> JudgeJob:
     return JudgeJob(
         judge_job_id=row.judge_job_id,
@@ -4221,11 +4234,12 @@ class DbStore:
             is_active: bool | None = None, subtasks: list | None = None,
             expected_subtasks: list | None = None) -> TestcaseSet | None:
         with self._session() as db:
+            contest = db.scalar(select(ContestRow).where(ContestRow.contest_id == contest_id)
+                .with_for_update(read=True, key_share=True).execution_options(populate_existing=True))
             problem = db.scalar(select(ProblemRow).where(ProblemRow.problem_id == problem_id).with_for_update())
             row = db.get(TestcaseSetRow, testcase_set_id)
-            if not problem or problem.contest_id != contest_id or not row or row.problem_id != problem_id:
+            if not contest or not problem or problem.contest_id != contest_id or not row or row.problem_id != problem_id:
                 return None
-            contest = db.get(ContestRow, contest_id)
             if expected_subtasks is not None and expected_subtasks != (row.subtasks or []):
                 raise AppError(409, "subtasks_conflict", "서브태스크 설정이 변경되었습니다. 새로고침한 뒤 다시 저장하세요.")
             orders = list(db.scalars(select(TestcaseRow.display_order).where(TestcaseRow.testcase_set_id == testcase_set_id)))
@@ -4425,9 +4439,7 @@ class DbStore:
     def create_submission(self, contest_id: str, problem_id: str, team_member_email: str, language: str, source_code: str) -> Submission:
         source_code = _normalize_source_code(source_code)
         with self._session() as db:
-            problem = db.get(ProblemRow, problem_id)
-            if not problem or problem.contest_id != contest_id:
-                raise ValueError("problem not found")
+            contest, problem = _submission_context(db, contest_id, problem_id)
             require_allowed(problem, language)
             member = db.scalar(select(TeamMemberRow).where(TeamMemberRow.contest_id == contest_id, TeamMemberRow.email == team_member_email))
             if not member:
@@ -4440,7 +4452,7 @@ class DbStore:
             require_participant_access(team, member)
             require_active_testcases(db, problem_id)
             submission = SubmissionRow(
-                scoring_mode=getattr(db.get(ContestRow, contest_id), "scoring_mode", "icpc") or "icpc",
+                scoring_mode=contest.scoring_mode or "icpc",
                 contest_id=contest_id,
                 division_id=team.division_id,
                 problem_id=problem_id,
@@ -4534,12 +4546,10 @@ class DbStore:
     ) -> Submission:
         source_code = _normalize_source_code(source_code)
         with self._session() as db:
-            problem = db.get(ProblemRow, problem_id)
-            if not problem or problem.contest_id != contest_id:
-                raise ValueError("problem not found")
+            contest, problem = _submission_context(db, contest_id, problem_id)
             require_active_testcases(db, problem_id)
             submission = SubmissionRow(
-                scoring_mode=getattr(db.get(ContestRow, contest_id), "scoring_mode", "icpc") or "icpc",
+                scoring_mode=contest.scoring_mode or "icpc",
                 contest_id=contest_id,
                 division_id=problem.division_id,
                 problem_id=problem_id,
@@ -4574,13 +4584,11 @@ class DbStore:
     def create_mock_submission(self, contest_id: str, problem_id: str, language: str, source_code: str) -> Submission:
         source_code = _normalize_source_code(source_code)
         with self._session() as db:
-            problem = db.get(ProblemRow, problem_id)
-            if not problem or problem.contest_id != contest_id:
-                raise ValueError("problem not found")
+            contest, problem = _submission_context(db, contest_id, problem_id)
             require_active_testcases(db, problem_id)
             require_allowed(problem, language)
             submission = SubmissionRow(
-                scoring_mode=getattr(db.get(ContestRow, contest_id), "scoring_mode", "icpc") or "icpc",
+                scoring_mode=contest.scoring_mode or "icpc",
                 contest_id=contest_id,
                 division_id=problem.division_id,
                 problem_id=problem_id,
@@ -6052,6 +6060,15 @@ class DbStore:
                         if scoring_mode == "ioi":
                             scoring.attach(submission, active_set, testcase_rows, row.lease_token)
                             collect_all = True
+                        else:
+                            # Reconcile pending legacy rows with the claim mode;
+                            # ICPC results must never enter IOI evidence handling.
+                            submission.scoring_mode = "icpc"
+                            submission.score = None
+                            submission.max_score = None
+                            submission.subtask_results = []
+                            submission.scoring_snapshot = {}
+                            submission.scoring_evidence = []
                         submission.status = SubmissionStatus.PREPARING.value
                         submission.status_updated_at = now_utc()
                         submission.compile_message = None

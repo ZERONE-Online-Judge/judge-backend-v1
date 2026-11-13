@@ -1,15 +1,18 @@
 """Official IOI fixed-score accumulation, immutable evidence and freeze boundaries."""
 from copy import deepcopy
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 import hashlib
 import os
 from uuid import uuid4
 from io import BytesIO
 from types import SimpleNamespace
+from threading import Event, get_ident
 
 import pytest
 from sqlalchemy import create_engine, event, select
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.schema import CreateSchema, DropSchema
 from sqlalchemy.orm import sessionmaker
 
@@ -453,3 +456,84 @@ def test_preview_accumulation_is_owner_scoped_and_never_affects_official_scores(
     other = {**participant, "member": SimpleNamespace(email="different@example.com", name="Other")}
     assert _problem_solve_statuses(c.cid, other)[c.pid]["score"] == 0
     assert all(row["total_score"] == 0 for row in board(c)["rows"])
+
+
+@pytest.mark.parametrize("kind", ["participant", "operator_test", "mock", "preview"])
+def test_first_submission_serializes_scoring_changes_on_postgresql(context, ioi_database, monkeypatch, kind):
+    if ioi_database.dialect.name != "postgresql":
+        pytest.skip("PostgreSQL row-lock concurrency regression")
+    from app.services import participant_preview
+    monkeypatch.setattr(participant_preview, "SessionLocal", context.sessions)
+    c = context
+    parent_thread = get_ident()
+    ready, proceed = Event(), Event()
+
+    def create_first():
+        if kind == "participant":
+            return store.create_submission(c.cid, c.pid, "team1@example.com", "cpp17", "int main(){}")
+        if kind == "operator_test":
+            return store.create_operator_test_submission(c.cid, c.pid, "cpp17", "int main(){}")
+        if kind == "mock":
+            return store.create_mock_submission(c.cid, c.pid, "cpp17", "int main(){}")
+        participant = {"division": SimpleNamespace(division_id=c.did),
+            "member": SimpleNamespace(email="preview@example.com", name="Preview")}
+        return participant_preview.create_preview_submission(c.cid, c.pid, participant, "cpp17", "int main(){}")
+
+    def before_query(_connection, cursor, statement, _parameters, _context, _many):
+        if get_ident() == parent_thread and "FOR UPDATE" in statement:
+            # The creator holds its transaction until the event is released.
+            # A server-side timeout proves blocking without scheduler sleeps.
+            cursor.execute("SET LOCAL lock_timeout = '200ms'")
+
+    def after_query(_connection, _cursor, statement, _parameters, _context, _many):
+        if get_ident() != parent_thread and "FROM problems" in statement and not ready.is_set():
+            ready.set()
+            assert proceed.wait(10), "first-submission transaction was not released"
+
+    event.listen(ioi_database, "before_cursor_execute", before_query)
+    event.listen(ioi_database, "after_cursor_execute", after_query)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(create_first)
+            try:
+                assert ready.wait(10), "first submission did not reach its context read"
+                for update_settings in (
+                    lambda: store.update_contest_settings(c.cid, scoring_mode="icpc"),
+                    lambda: store.update_testcase_set(c.cid, c.pid, c.setid, subtasks=[]),
+                ):
+                    with pytest.raises(OperationalError) as blocked:
+                        update_settings()
+                    assert getattr(blocked.value.orig, "sqlstate", None) == "55P03"
+            finally:
+                proceed.set()
+            submission = future.result(timeout=10)
+        assert submission.scoring_mode == "ioi"
+        with pytest.raises(AppError) as locked:
+            store.update_contest_settings(c.cid, scoring_mode="icpc")
+        assert locked.value.code == "scoring_mode_locked"
+    finally:
+        proceed.set()
+        event.remove(ioi_database, "before_cursor_execute", before_query)
+        event.remove(ioi_database, "after_cursor_execute", after_query)
+
+
+def test_icpc_claim_reconciles_stale_pending_ioi_metadata(context):
+    c = context
+    sid, _ = create(c, claim=False)
+    with c.sessions() as db:
+        db.get(ContestRow, c.cid).scoring_mode = "icpc"
+        row = db.get(SubmissionRow, sid)
+        row.score, row.max_score = 30, 100
+        row.subtask_results = [{"subtask_id": "small", "score": 30}]
+        row.scoring_snapshot = {"testcase_orders": [1, 2]}
+        row.scoring_evidence = [{"index": 1, "final_status": "accepted"}]
+        db.commit()
+    job = store.claim_jobs(c.node.judge_node_id, SECRET, 8)[0]
+    assert job["scoring_mode"] == "icpc"
+    result, _ = store.report_judge_result(job["judge_job_id"], SECRET, job["lease_token"],
+        SubmissionStatus.ACCEPTED, None, None, None)
+    assert result.scoring_mode == "icpc" and result.score is None
+    assert result.max_score is None and result.subtask_results == []
+    with c.sessions() as db:
+        row = db.get(SubmissionRow, sid)
+        assert row.scoring_snapshot == {} and row.scoring_evidence == []
