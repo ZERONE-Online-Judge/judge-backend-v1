@@ -11,6 +11,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Query, Request, UploadFile
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 from app.problem_languages import ProblemStatements, StatementTranslation, validate_statement_fields
+from app.presentation_alerts import AlertMinutes, default_alert_minutes
 
 from app.models import ContestResourceAccess, ContestStatus, ContestVisibility, ProblemAsset, ScoreboardFreezeMode, ScoreboardReleaseMode, SubmissionStatus, TeamMemberRole, now_utc
 from app.services.authz import has_contest_permission, is_contest_master, require_contest_staff, require_staff
@@ -158,6 +159,8 @@ class ContestSettingsUpdateRequest(BaseModel):
     problem_access_after_end: ContestResourceAccess | None = None
     scoreboard_public_during_contest: bool | None = None
     hide_participation_counts_before_start: bool | None = None
+    presentation_freeze_alert_minutes: AlertMinutes = Field(default_factory=default_alert_minutes)
+    presentation_end_alert_minutes: AlertMinutes = Field(default_factory=default_alert_minutes)
     scoreboard_access_after_end: ContestResourceAccess | None = None
     submission_access_after_end: ContestResourceAccess | None = None
     board_access_after_end: ContestResourceAccess | None = None

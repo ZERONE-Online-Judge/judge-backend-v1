@@ -7,6 +7,7 @@ from uuid import uuid4
 from pydantic import BaseModel, EmailStr, Field
 from app.problem_languages import ProblemStatements
 from app.judge_languages import ProgrammingLanguages
+from app.presentation_alerts import AlertMinutes, default_alert_minutes
 
 
 def now_utc() -> datetime:
@@ -145,6 +146,8 @@ class Contest(BaseModel):
     problem_access_after_end: ContestResourceAccess = ContestResourceAccess.PRIVATE
     scoreboard_public_during_contest: bool = False
     hide_participation_counts_before_start: bool = False
+    presentation_freeze_alert_minutes: AlertMinutes = Field(default_factory=default_alert_minutes)
+    presentation_end_alert_minutes: AlertMinutes = Field(default_factory=default_alert_minutes)
     scoreboard_access_after_end: ContestResourceAccess = ContestResourceAccess.PRIVATE
     submission_access_after_end: ContestResourceAccess = ContestResourceAccess.PRIVATE
     board_access_after_end: ContestResourceAccess = ContestResourceAccess.PARTICIPANTS

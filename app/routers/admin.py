@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import BaseModel, EmailStr, Field, StrictBool, ConfigDict, field_validator, model_validator
 
 from app.models import ContestStatus, ContestVisibility, JudgeNode, now_utc
+from app.presentation_alerts import AlertMinutes, default_alert_minutes
 from app.settings import settings
 from app.services.authz import require_service_master
 from app.services.contest_roles import title_for_roles
@@ -80,6 +81,8 @@ class ContestCreateRequest(BaseModel):
     start_at: datetime | None = None
     end_at: datetime | None = None
     freeze_at: datetime | None = None
+    presentation_freeze_alert_minutes: AlertMinutes = Field(default_factory=default_alert_minutes)
+    presentation_end_alert_minutes: AlertMinutes = Field(default_factory=default_alert_minutes)
     operator_email: EmailStr | None = None
     operator_display_name: str | None = Field(default=None, min_length=1, max_length=120)
 
@@ -194,6 +197,8 @@ async def create_contest(payload: ContestCreateRequest, request: Request):
         payload.status,
         visibility=payload.visibility,
         visibility_after_end=payload.visibility_after_end,
+        presentation_freeze_alert_minutes=payload.presentation_freeze_alert_minutes,
+        presentation_end_alert_minutes=payload.presentation_end_alert_minutes,
     )
     if payload.operator_email:
         try:

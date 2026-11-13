@@ -41,6 +41,8 @@ def reveal_versions(contest_ids):
                     ContestRow.scoreboard_frozen_at,
                     ContestRow.scoreboard_release_mode,
                     ContestRow.freeze_submission_count_visible,
+                    ContestRow.presentation_freeze_alert_minutes,
+                    ContestRow.presentation_end_alert_minutes,
                 ).where(ContestRow.contest_id.in_(batch))
             ).all()
             releases = db.execute(

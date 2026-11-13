@@ -5,6 +5,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 from app.models import new_id, now_utc
+from app.presentation_alerts import default_alert_minutes
 
 
 class ContestRow(Base):
@@ -24,6 +25,8 @@ class ContestRow(Base):
     problem_access_after_end: Mapped[str] = mapped_column(String(32), default="private")
     scoreboard_public_during_contest: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     hide_participation_counts_before_start: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    presentation_freeze_alert_minutes: Mapped[list[int]] = mapped_column(JSON, default=default_alert_minutes, server_default=text("'[30,20,10,5]'"))
+    presentation_end_alert_minutes: Mapped[list[int]] = mapped_column(JSON, default=default_alert_minutes, server_default=text("'[30,20,10,5]'"))
     scoreboard_access_after_end: Mapped[str] = mapped_column(String(32), default="private")
     submission_access_after_end: Mapped[str] = mapped_column(String(32), default="private")
     board_access_after_end: Mapped[str] = mapped_column(String(32), default="participants")

@@ -21,6 +21,7 @@ from app.services.participant_access import require_participant_access
 from app.services.judging_inputs import require_active_testcases, TEST_BASED_KINDS, QUEUED_TESTCASES_NOT_READY
 from app.settings import settings
 from app.problem_languages import validate_statement_fields
+from app.presentation_alerts import PRESENTATION_ALERT_FIELDS, default_alert_minutes, normalize_alert_minutes
 from app.judge_languages import DEFAULT_LANGUAGES, LANGUAGES, NEW_LANGUAGES, RUNTIME_CAPABILITY, require_allowed, validate_languages
 from app.services.package_builder import is_editor_source_asset
 from app.services.problem_order import PROBLEM_ORDER_POLICY, problem_code_sort_key
@@ -183,6 +184,8 @@ def _contest(row: ContestRow, *, release_locked: bool | None = None) -> Contest:
         problem_access_after_end=ContestResourceAccess(row.problem_access_after_end or "private"),
         scoreboard_public_during_contest=bool(row.scoreboard_public_during_contest),
         hide_participation_counts_before_start=bool(row.hide_participation_counts_before_start),
+        presentation_freeze_alert_minutes=row.presentation_freeze_alert_minutes if row.presentation_freeze_alert_minutes is not None else default_alert_minutes(),
+        presentation_end_alert_minutes=row.presentation_end_alert_minutes if row.presentation_end_alert_minutes is not None else default_alert_minutes(),
         scoreboard_access_after_end=ContestResourceAccess(row.scoreboard_access_after_end or "private"),
         submission_access_after_end=ContestResourceAccess(row.submission_access_after_end or "private"),
         board_access_after_end=ContestResourceAccess(row.board_access_after_end or "participants"),
@@ -2570,6 +2573,9 @@ class DbStore:
         status: ContestStatus = ContestStatus.DRAFT,
         visibility: ContestVisibility = ContestVisibility.PUBLIC,
         visibility_after_end: ContestVisibility = ContestVisibility.PUBLIC,
+        *,
+        presentation_freeze_alert_minutes: list[int] | None = None,
+        presentation_end_alert_minutes: list[int] | None = None,
     ) -> Contest:
         default_start, default_end, default_freeze = demo_times()
         resolved_start = start_at or default_start
@@ -2587,6 +2593,8 @@ class DbStore:
                 start_at=resolved_start,
                 end_at=resolved_end,
                 freeze_at=resolved_freeze,
+                presentation_freeze_alert_minutes=normalize_alert_minutes(presentation_freeze_alert_minutes) if presentation_freeze_alert_minutes is not None else default_alert_minutes(),
+                presentation_end_alert_minutes=normalize_alert_minutes(presentation_end_alert_minutes) if presentation_end_alert_minutes is not None else default_alert_minutes(),
             )
             db.add(row)
             db.commit()
@@ -3346,6 +3354,8 @@ class DbStore:
             "problem_access_after_end",
             "scoreboard_public_during_contest",
             "hide_participation_counts_before_start",
+            "presentation_freeze_alert_minutes",
+            "presentation_end_alert_minutes",
             "scoreboard_access_after_end",
             "submission_access_after_end",
             "board_access_after_end",
@@ -3370,6 +3380,12 @@ class DbStore:
             if not row:
                 return None
             require_unchanged_ended_schedule(row, values)
+            for field in PRESENTATION_ALERT_FIELDS:
+                if field in values:
+                    try:
+                        values[field] = normalize_alert_minutes(values[field])
+                    except ValueError as error:
+                        raise AppError(422, "validation_error", str(error)) from error
             next_release_mode = values.get("scoreboard_release_mode")
             if next_release_mode is not None and next_release_mode != (row.scoreboard_release_mode or "manual"):
                 if db.scalar(select(ScoreboardReleaseRow.division_id).where(ScoreboardReleaseRow.contest_id == contest_id, ScoreboardReleaseRow.mode != "not_started").limit(1)):

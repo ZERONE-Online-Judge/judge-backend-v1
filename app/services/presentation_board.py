@@ -33,6 +33,8 @@ def presentation_board(
                 "freeze_at",
                 "scoreboard_freeze_mode",
                 "scoreboard_release_mode",
+                "presentation_freeze_alert_minutes",
+                "presentation_end_alert_minutes",
             )
         }
         ended = contest.status in {"ended", "finalized", "archived"} or (
