@@ -56,7 +56,7 @@ def merge(row, values, terminal=None):
     merged, incoming, writes = dict(previous), set(), {}
     for item in values:
         try:
-            value = editor_judging.CaseResult.model_validate(item).model_dump()
+            value = editor_judging.case_result_value(item)
         except ValueError as error:
             raise TestcaseResultsInvalid("invalid_format") from error
         index = value["index"]

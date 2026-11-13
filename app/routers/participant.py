@@ -248,6 +248,8 @@ def _participant_submission_payload(
         item["progress_percent"] = max(0, min(100, round((progress_current / progress_total) * 100)))
     item["progress_current"] = None
     item["progress_total"] = None
+    if not show_progress or submission.status != "judging":
+        item["progress_phase"] = None
     # Participants should not receive internal judge diagnostics/logs.
     item["compile_message"] = None
     item["judge_message"] = None

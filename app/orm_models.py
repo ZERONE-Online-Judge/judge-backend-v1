@@ -228,6 +228,7 @@ class SubmissionRow(Base):
     failed_testcase_order: Mapped[int | None] = mapped_column(Integer, nullable=True)
     progress_current: Mapped[int | None] = mapped_column(Integer, nullable=True)
     progress_total: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    progress_phase: Mapped[str | None] = mapped_column(String(32), nullable=True)
     runtime_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     memory_kb: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
@@ -818,6 +819,7 @@ class EditorJudgeRunRow(Base):
     status: Mapped[str] = mapped_column(String(32), default="waiting", index=True)
     testcase_count: Mapped[int] = mapped_column(Integer)
     progress_current: Mapped[int] = mapped_column(Integer, default=0)
+    progress_phase: Mapped[str | None] = mapped_column(String(32), nullable=True)
     assigned_node_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     node_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
     agent_version: Mapped[str | None] = mapped_column(String(64), nullable=True)

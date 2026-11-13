@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
 from sqlalchemy import select
 
 from app.services.errors import AppError, TestcaseResultsInvalid
+from app.judge_timing import timing_evidence
 
 CAPABILITY = "zoj-judge-subtasks-v1"
 SCORING_MODES = ("icpc", "ioi")
@@ -130,7 +131,10 @@ def merge_evidence(snapshot_value, previous, incoming):
         if type(index) is not int or index not in expected or index in seen or status not in FINAL or status == "compile_error":
             raise TestcaseResultsInvalid("invalid_testcase")
         seen.add(index)
-        value = {"index": index, "final_status": status}
+        try:
+            value = {"index": index, "final_status": status, **timing_evidence(item)}
+        except ValueError as error:
+            raise TestcaseResultsInvalid("invalid_format") from error
         if index in values and values[index] != value:
             raise TestcaseResultsInvalid("testcase_changed")
         values[index] = value

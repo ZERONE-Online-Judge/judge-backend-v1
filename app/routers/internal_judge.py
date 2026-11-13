@@ -1,4 +1,5 @@
 import asyncio
+from typing import Literal
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -75,8 +76,15 @@ class ProgressRequest(NodeCredentialRequest):
     status: SubmissionStatus
     progress_current: int | None = None
     progress_total: int | None = None
+    progress_phase: Literal["tle_confirmation"] | None = None
     testcase_result: editor_judging.CaseResult | None = None
     testcase_results: list[editor_judging.CaseResult] | None = Field(default=None, max_length=10000)
+
+    @model_validator(mode="after")
+    def phase_requires_judging(self):
+        if self.progress_phase and self.status != SubmissionStatus.JUDGING:
+            raise ValueError("Progress phase requires judging status")
+        return self
 
     @field_validator("status")
     @classmethod
@@ -232,6 +240,7 @@ async def report_progress(job_id: str, payload: ProgressRequest, request: Reques
             payload.status,
             payload.progress_current,
             payload.progress_total,
+            progress_phase=payload.progress_phase,
             testcase_result=payload.testcase_result.model_dump() if payload.testcase_result else None,
             testcase_results=[case.model_dump() for case in payload.testcase_results] if payload.testcase_results is not None else None,
         )
@@ -239,6 +248,7 @@ async def report_progress(job_id: str, payload: ProgressRequest, request: Reques
             editor_result = await asyncio.to_thread(
                 editor_judging.update, job_id, payload.node_secret, payload.lease_token,
                 status=payload.status.value, current=payload.progress_current, total=payload.progress_total,
+                progress_phase=payload.progress_phase,
                 testcase_result=payload.testcase_result.model_dump() if payload.testcase_result else None,
                 testcase_results=[case.model_dump() for case in payload.testcase_results] if payload.testcase_results is not None else None,
                 session_factory=store._session,

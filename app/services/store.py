@@ -416,6 +416,7 @@ def _submission(row: SubmissionRow, include_source: bool = True, *, staff_titles
         failed_testcase_order=row.failed_testcase_order,
         progress_current=row.progress_current,
         progress_total=row.progress_total,
+        progress_phase=row.progress_phase if row.status == "judging" else None,
         runtime_ms=row.runtime_ms,
         memory_kb=row.memory_kb,
     )
@@ -923,6 +924,7 @@ class DbStore:
                     SubmissionRow.failed_testcase_order,
                     SubmissionRow.progress_current,
                     SubmissionRow.progress_total,
+                    SubmissionRow.progress_phase,
                     SubmissionRow.runtime_ms,
                     SubmissionRow.memory_kb,
                     SubmissionRow.scoring_mode, SubmissionRow.score, SubmissionRow.max_score, SubmissionRow.subtask_results,
@@ -1465,6 +1467,7 @@ class DbStore:
                     SubmissionRow.failed_testcase_order,
                     SubmissionRow.progress_current,
                     SubmissionRow.progress_total,
+                    SubmissionRow.progress_phase,
                     SubmissionRow.runtime_ms,
                     SubmissionRow.memory_kb,
                     SubmissionRow.scoring_mode, SubmissionRow.score, SubmissionRow.max_score, SubmissionRow.subtask_results,
@@ -5891,6 +5894,7 @@ class DbStore:
                 None, QUEUED_TESTCASES_NOT_READY, None, None, None)
         else:
             submission.status = SubmissionStatus.SYSTEM_ERROR.value
+            submission.progress_phase = None
             submission.status_updated_at = now_utc()
             submission.compile_message = None
             submission.judge_message = QUEUED_TESTCASES_NOT_READY
@@ -6072,6 +6076,7 @@ class DbStore:
                             submission.scoring_snapshot = {}
                             submission.scoring_evidence = []
                         submission.status = SubmissionStatus.PREPARING.value
+                        submission.progress_phase = None
                         submission.status_updated_at = now_utc()
                         submission.compile_message = None
                         submission.judge_message = None
@@ -6361,6 +6366,7 @@ class DbStore:
             submission = db.get(SubmissionRow, row.submission_id)
             if submission and submission.status in {SubmissionStatus.PREPARING.value, SubmissionStatus.JUDGING.value}:
                 submission.status = SubmissionStatus.WAITING.value
+                submission.progress_phase = None
                 submission.status_updated_at = now_utc()
                 submission.compile_message = None
                 submission.judge_message = None
@@ -6399,9 +6405,12 @@ class DbStore:
         progress_current: int | None,
         progress_total: int | None,
         *, testcase_result: dict | None = None, testcase_results: list[dict] | None = None,
+        progress_phase: str | None = None,
     ) -> tuple[Submission, JudgeJob] | None:
         if status not in JUDGE_PROGRESS_STATUSES:
             raise ValueError("invalid judge progress status")
+        if progress_phase not in {None, "tle_confirmation"} or (progress_phase and status != SubmissionStatus.JUDGING):
+            raise ValueError("invalid judge progress phase")
         with self._session() as db:
             job = self._owned_running_job(db, job_id, node_secret, lease_token)
             if not job:
@@ -6412,7 +6421,7 @@ class DbStore:
             rejudging_item = rejudging.item_for_job(db, job.judge_job_id)
             if rejudging_item:
                 rejudging.record_progress(rejudging_item, status, progress_current, progress_total,
-                    [testcase_result] if testcase_result is not None else testcase_results)
+                    [testcase_result] if testcase_result is not None else testcase_results, progress_phase=progress_phase)
                 job.leased_at = now_utc()
                 db.commit()
                 return rejudging.candidate_submission(submission, rejudging_item), _job(job)
@@ -6429,6 +6438,7 @@ class DbStore:
                 completed = scoring.record(submission, [testcase_result] if testcase_result is not None else testcase_results)
                 progress_current, progress_total = completed, len(submission.scoring_snapshot["testcase_orders"])
             submission.status = status.value
+            submission.progress_phase = progress_phase
             submission.progress_total = max(progress_total, 0) if progress_total is not None else None
             if progress_current is None:
                 submission.progress_current = 0 if submission.progress_total is not None else None
@@ -6535,6 +6545,7 @@ class DbStore:
                 submission.progress_current = completed
                 submission.progress_total = len(submission.scoring_snapshot["testcase_orders"])
             submission.status = final_status.value
+            submission.progress_phase = None
             submission.compile_message = compile_message
             submission.judge_message = judge_message
             submission.failed_testcase_order = failed_testcase_order

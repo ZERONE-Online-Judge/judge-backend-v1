@@ -121,6 +121,13 @@ def create_schema() -> None:
     from app import orm_models  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
+    # PostgreSQL uses Alembic; SQLite also supports direct schema initialization.
+    if settings.database_url.startswith("sqlite"):
+        with engine.begin() as connection:
+            inspector = inspect(connection)
+            for table in ("submissions", "editor_judge_runs"):
+                if "progress_phase" not in {column["name"] for column in inspector.get_columns(table)}:
+                    connection.execute(text(f"ALTER TABLE {table} ADD COLUMN progress_phase VARCHAR(32)"))
     with engine.begin() as connection:
         connection.execute(text("CREATE INDEX IF NOT EXISTS idx_submissions_submitted_id ON submissions (submitted_at DESC, submission_id DESC)"))
         connection.execute(text("CREATE INDEX IF NOT EXISTS idx_submissions_contest_submitted_id ON submissions (contest_id, submitted_at DESC, submission_id DESC)"))

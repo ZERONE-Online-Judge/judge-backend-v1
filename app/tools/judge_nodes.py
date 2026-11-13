@@ -41,12 +41,14 @@ def update_credential(name: str, *, enabled: bool | None = None, secret: str | N
                     submission.status_updated_at = now_utc()
                     submission.progress_current = None
                     submission.progress_total = None
+                    submission.progress_phase = None
             for model, states in [(EditorJudgeRunRow, ["preparing", "judging"]), (EditorExecutionTaskRow, ["running"])]:
                 for task in db.scalars(select(model).where(model.assigned_node_id == node.judge_node_id, model.status.in_(states)).with_for_update()):
                     task.status = "waiting"
                     task.assigned_node_id = task.lease_token = task.leased_at = None
                     if isinstance(task, EditorJudgeRunRow):
                         task.progress_current = 0
+                        task.progress_phase = None
             node.running_job_count = 0
             node.free_slots = node.total_slots
         db.commit()

@@ -19,6 +19,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.database import SessionLocal
+from app.judge_timing import TIMING_FIELDS, TimingEvidence
 from app.models import JUDGE_FINAL_STATUSES, now_utc
 from app.orm_models import EditorJudgeRunRow as Run, IdentityAccountRow, JudgeNodeRow
 from app.services.errors import AppError
@@ -60,7 +61,7 @@ class Case(Strict):
     answer_sha: str = Field(pattern=HASH)
 
 
-class CaseResult(Strict):
+class CaseResult(Strict, TimingEvidence):
     index: int = Field(ge=1, le=1000000)
     final_status: Literal["accepted", "wrong_answer", "time_limit_exceeded", "memory_limit_exceeded", "runtime_error", "output_limit_exceeded", "system_error"]
     runtime_ms: int | None = Field(default=None, ge=0)
@@ -69,6 +70,15 @@ class CaseResult(Strict):
     output_base64: str | None = Field(default=None, max_length=4 * ((MAX_REFERENCE_OUTPUT_BYTES + 2) // 3))
     output_total_bytes: int | None = Field(default=None, ge=0)
     output_truncated: bool = False
+
+
+def case_result_value(item):
+    value = CaseResult.model_validate(item).model_dump()
+    # Do not add null keys to older evidence: retries must stay idempotent.
+    for key in TIMING_FIELDS:
+        if value[key] is None:
+            value.pop(key)
+    return value
 
 
 class Resource(Strict):
@@ -126,6 +136,7 @@ def public_run(row):
     return {
         "id": row.run_id, "status": row.status,
         "progress_current": row.progress_current, "progress_total": row.testcase_count,
+        "progress_phase": row.progress_phase if row.status == "judging" else None,
         "node_name": row.node_name, "agent_version": row.agent_version,
         "attempts": row.attempts,
         "result": row.result, "runtime_revision": row.payload["runtime_revision"],
@@ -357,6 +368,7 @@ def get_run(email, run_id, cancel=False):
             raise AppError(404, "editor_judge_run_missing", "내 채점 요청을 찾을 수 없습니다.")
         if cancel and row.status in ACTIVE:
             row.status = "cancelled"
+            row.progress_phase = None
             row.lease_token = None
             row.completed_at = now_utc()
             db.commit()
@@ -371,6 +383,7 @@ def maintenance(session_factory=None):
         with (session_factory or SessionLocal)() as db:
             for row in db.scalars(select(Run).where(Run.status.in_(ACTIVE), Run.created_at < now_utc() - timedelta(hours=1)).with_for_update(skip_locked=True)):
                 row.status = "system_error"
+                row.progress_phase = None
                 row.result = {"final_status": "system_error", "judge_message": "채점 대기·실행 한도를 초과했습니다."}
                 row.lease_token = None
                 row.completed_at = now_utc()
@@ -420,6 +433,7 @@ def claim_jobs(node_id, node_secret, max_count, session_factory=None):
             row.status = "waiting" if row.attempts < 3 else "system_error"
             row.assigned_node_id = row.lease_token = row.leased_at = None
             row.progress_current = 0
+            row.progress_phase = None
             if row.payload.get("collect_all_results"):
                 row.result = None
             if row.status == "system_error":
@@ -445,6 +459,7 @@ def claim_jobs(node_id, node_secret, max_count, session_factory=None):
         for row in rows:
             row.status, row.assigned_node_id, row.lease_token, row.leased_at = "preparing", node_id, str(uuid4()), now_utc()
             row.node_name, row.agent_version = node.node_name, node.agent_version
+            row.progress_phase = None
             row.attempts += 1
             payload = row.payload
             jobs.append({
@@ -478,7 +493,7 @@ def merge_case_results(row, values, terminal=None):
     writes = {}
     incoming = set()
     for item in values:
-        value = CaseResult.model_validate(item).model_dump()
+        value = case_result_value(item)
         index = value["index"]
         if index not in expected or index in incoming:
             raise ValueError("lease mismatch: invalid testcase result")
@@ -535,7 +550,7 @@ def testcase_output(email, run_id, index):
                 "size": len(content), "total_bytes": case["output_total_bytes"], "truncated": case["output_truncated"]}
 
 
-def update(run_id, node_secret, lease_token, *, result=None, status=None, current=None, total=None, testcase_result=None, testcase_results=None, session_factory=None):
+def update(run_id, node_secret, lease_token, *, result=None, status=None, current=None, total=None, testcase_result=None, testcase_results=None, progress_phase=None, session_factory=None):
     with (session_factory or SessionLocal)() as db:
         row = db.scalar(select(Run).where(Run.run_id == run_id).with_for_update())
         if not row:
@@ -561,6 +576,7 @@ def update(run_id, node_secret, lease_token, *, result=None, status=None, curren
             if failed is not None and failed not in {c["display_order"] for c in row.payload["testcases"]}:
                 raise ValueError("lease mismatch")
             row.status = result["final_status"]
+            row.progress_phase = None
             if row.payload.get("collect_all_results"):
                 cases, complete = merge_case_results(row, result.get("testcase_results") or [], result)
                 row.result = {**result, "testcase_results": cases, "full_suite_complete": complete}
@@ -573,9 +589,10 @@ def update(run_id, node_secret, lease_token, *, result=None, status=None, curren
             if row.status == "accepted":
                 row.progress_current = row.testcase_count
         elif status:
-            if status not in RUNNING or total not in {None, row.testcase_count}:
+            if status not in RUNNING or total not in {None, row.testcase_count} or progress_phase not in {None, "tle_confirmation"} or (progress_phase and status != "judging"):
                 raise ValueError("lease mismatch")
             row.status = status
+            row.progress_phase = progress_phase
             row.progress_current = max(row.progress_current, min(max(current or 0, 0), row.testcase_count))
             if testcase_result is not None or testcase_results is not None:
                 if not row.payload.get("collect_all_results"):

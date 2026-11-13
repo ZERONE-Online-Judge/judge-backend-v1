@@ -22,7 +22,7 @@ from app.services.storage import object_storage
 
 RESULT_FIELDS = (
     "status", "compile_message", "judge_message", "failed_testcase_order",
-    "runtime_ms", "memory_kb", "progress_current", "progress_total", "status_updated_at",
+    "runtime_ms", "memory_kb", "progress_current", "progress_total", "progress_phase", "status_updated_at",
     "scoring_mode", "score", "max_score", "subtask_results", "scoring_snapshot", "scoring_evidence",
 )
 FINAL = {value.value for value in JUDGE_FINAL_STATUSES}
@@ -265,12 +265,12 @@ def requeue(db, job):
     return False
 
 
-def record_progress(item, status, current, total, testcase_results=None):
+def record_progress(item, status, current, total, testcase_results=None, *, progress_phase=None):
     value = dict(item.candidate_result)
     if value.get("scoring_mode") == "ioi":
         value["scoring_evidence"] = scoring.merge_evidence(value["scoring_snapshot"], value.get("scoring_evidence"), testcase_results)
         current, total = len(value["scoring_evidence"]), len(value["scoring_snapshot"]["testcase_orders"])
-    value.update(status=status.value, progress_total=max(total, 0) if total is not None else None,
+    value.update(status=status.value, progress_phase=progress_phase, progress_total=max(total, 0) if total is not None else None,
         status_updated_at=now_utc().isoformat())
     total = value["progress_total"]
     value["progress_current"] = (0 if total is not None else None) if current is None else (
@@ -284,7 +284,7 @@ def record_result(item, status, compile_message, judge_message, failed_order, ru
         value["scoring_evidence"] = scoring.merge_evidence(value["scoring_snapshot"], value.get("scoring_evidence"), testcase_results)
         value["score"], value["subtask_results"] = scoring.calculate(value["scoring_snapshot"], value["scoring_evidence"], status.value, failed_order)
         value["progress_current"] = len(value["scoring_evidence"])
-    value.update(status=status.value, compile_message=compile_message, judge_message=judge_message,
+    value.update(status=status.value, progress_phase=None, compile_message=compile_message, judge_message=judge_message,
         failed_testcase_order=failed_order, runtime_ms=max(runtime_ms, 0) if runtime_ms is not None else None,
         memory_kb=max(memory_kb, 0) if memory_kb is not None else None, status_updated_at=now_utc().isoformat())
     if status.value == "accepted" and value.get("progress_total") is not None:
@@ -395,7 +395,7 @@ def decide(store, cid, bid, action, actor):
                     job.leased_at = None
             for item in items:
                 if item.candidate_result.get("status") not in FINAL:
-                    item.candidate_result = {**item.candidate_result, "status": "cancelled",
+                    item.candidate_result = {**item.candidate_result, "status": "cancelled", "progress_phase": None,
                         "status_updated_at": now_utc().isoformat()}
         for item in items:
             item.active_submission_id = None
