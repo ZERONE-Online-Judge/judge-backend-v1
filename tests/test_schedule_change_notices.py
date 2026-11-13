@@ -59,6 +59,17 @@ def test_schedule_change_only_requires_notice_for_open_or_running_contests(sched
     contest = create_contest(status)
     new_end = contest.end_at + timedelta(minutes=10)
     body = {"end_at": new_end.isoformat()}
+    if status in {ContestStatus.ENDED, ContestStatus.FINALIZED, ContestStatus.ARCHIVED}:
+        response = schedule_client.patch(f"/api/operator/contests/{contest.contest_id}/settings", json=body)
+        assert response.status_code == 409, response.text
+        assert response.json()["error"]["code"] == "contest_schedule_locked"
+        saved = store.contests[contest.contest_id]
+        assert (saved.start_at, saved.freeze_at, saved.end_at) == (
+            contest.start_at, contest.freeze_at, contest.end_at,
+        )
+        assert saved.emergency_notice == "기존 운영 안내"
+        assert store.contest_notices_for_view(contest.contest_id, operator=True) == []
+        return
     if status in {ContestStatus.OPEN, ContestStatus.RUNNING}:
         response = confirm_schedule_change(schedule_client, contest, body)
     else:
