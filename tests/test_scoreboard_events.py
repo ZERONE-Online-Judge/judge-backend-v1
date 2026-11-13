@@ -52,10 +52,13 @@ def test_stream_routes_keep_operator_and_display_credentials_separate(
         assert result.text == "event: scoreboard_update\ndata: {}\n\n"
 
 
-def test_versions_load_only_small_columns_and_follow_release_undo_and_policy(setup):
+@pytest.mark.parametrize("initial_counts", [False, True])
+def test_versions_load_only_small_columns_and_follow_release_undo_and_policy(setup, initial_counts):
     cid, did, _, _, _ = setup
     with SessionLocal.begin() as db:
-        db.get(ContestRow, cid).status = "ended"
+        contest = db.get(ContestRow, cid)
+        contest.status = "ended"
+        contest.freeze_submission_count_visible = initial_counts
     statements = []
 
     def capture(conn, cursor, statement, parameters, context, executemany):
@@ -83,7 +86,9 @@ def test_versions_load_only_small_columns_and_follow_release_undo_and_policy(set
         db.get(ContestRow, cid).scoreboard_freeze_mode = "live"
     after_freeze = events.reveal_versions({cid})
     assert after_freeze != after_undo
-    store.update_contest_settings(cid, freeze_submission_count_visible=True)
+    store.update_contest_settings(cid, freeze_submission_count_visible=initial_counts)
+    assert events.reveal_versions({cid}) == after_freeze
+    store.update_contest_settings(cid, freeze_submission_count_visible=not initial_counts)
     assert events.reveal_versions({cid}) != after_freeze
     assert events.reveal_versions({"missing"}) == {}
 
