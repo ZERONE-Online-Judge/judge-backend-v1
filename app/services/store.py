@@ -11,7 +11,7 @@ from fastapi.encoders import jsonable_encoder
 
 from sqlalchemy import LargeBinary, cast, case as sql_case, delete, func, inspect, or_, select, tuple_, update
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, joinedload, load_only, object_session, selectinload
+from sqlalchemy.orm import Session, defer, joinedload, load_only, object_session, selectinload
 
 from app.database import SessionLocal, create_schema
 from app.services.request_sessions import after_commit, borrowed_session, current_session
@@ -1378,6 +1378,21 @@ class DbStore:
                     visible.append(tuple_(SubmissionRow.participant_team_id, SubmissionRow.problem_id).in_(cells - pending))
                 clauses.append((SubmissionRow.division_id == did) & or_(*visible))
             return or_(*clauses) if clauses else SubmissionRow.contest_id.is_(None)
+
+    def submissions_by_ids(self, contest_id: str, submission_ids: list[str]) -> list[Submission]:
+        """Read a visible page's live results without code or scoring evidence."""
+        if not submission_ids:
+            return []
+        with self._session() as db:
+            rows = list(db.scalars(select(SubmissionRow).where(
+                SubmissionRow.contest_id == contest_id,
+                SubmissionRow.submission_id.in_(submission_ids),
+                SubmissionRow.submission_kind != "verification_trial",
+            ).options(*(defer(getattr(SubmissionRow, name), raiseload=True) for name in (
+                "source_code", "scoring_snapshot", "scoring_evidence")))))
+            titles = _submission_staff_titles(rows, db)
+            by_id = {row.submission_id: _submission(row, include_source=False, staff_titles=titles) for row in rows}
+            return [by_id[sid] for sid in submission_ids if sid in by_id]
 
     def list_submissions(
         self,

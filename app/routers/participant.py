@@ -3,10 +3,11 @@ from app.services.request_sessions import request_database
 import asyncio
 from typing import Literal
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel, EmailStr, Field
 from starlette.concurrency import run_in_threadpool
-from app.services.submission_status import PENDING, wait_for_submission, read_status_snapshot
+from app.services.submission_status import (PENDING, read_status_snapshot,
+    submission_versions, wait_for_submission_changes)
 from app.database import status_session
 from app.services.scoreboard_response import scoreboard_response
 
@@ -607,6 +608,7 @@ async def wait_mock_submission_status(
 ):
     @request_database(session_factory=status_session)
     def snapshot():
+        versions = submission_versions([submission_id])
         submission = store.get_submission(submission_id, include_source=False)
         if not submission or submission.contest_id != contest_id or not _is_mock_submission(submission):
             raise not_found()
@@ -621,12 +623,12 @@ async def wait_mock_submission_status(
         if contest.problem_access_after_end == ContestResourceAccess.PARTICIPANTS and not participant:
             raise authentication_required("Participant access token is required.")
         return submission, _mock_submission_payload(submission,
-            show_progress=contest.participant_progress_visible or contest.mock_judging_progress_visible)
+            show_progress=contest.participant_progress_visible or contest.mock_judging_progress_visible), versions
 
-    submission, payload = await read_status_snapshot(snapshot)
+    submission, payload, versions = await read_status_snapshot(snapshot)
     if submission.status in PENDING:
-        await wait_for_submission(submission_id, min(max(wait_seconds, 0), 10))
-        submission, payload = await read_status_snapshot(snapshot)
+        await wait_for_submission_changes(versions, min(max(wait_seconds, 0), 2))
+        submission, payload, _ = await read_status_snapshot(snapshot)
     return ok(request, payload)
 
 
@@ -853,6 +855,40 @@ def submissions(
     )
 
 
+@router.get("/contests/{contest_id}/submissions:wait")
+async def wait_submissions(
+    contest_id: str, request: Request,
+    submission_id: list[str] = Query(min_length=1, max_length=20),
+    wait_seconds: float = Query(default=2, ge=0, le=2),
+):
+    ids = list(dict.fromkeys(submission_id))
+
+    @request_database(session_factory=status_session)
+    def snapshot():
+        participant = _require_contest_participant(request, contest_id)
+        contest = store.get_contest(contest_id)
+        versions = submission_versions(ids)
+        submissions = store.submissions_by_ids(contest_id, ids)
+        if not contest or len(submissions) != len(ids) or any(
+            not owns_submission(participant, submission) for submission in submissions):
+            raise not_found()
+        payloads = _participant_submission_payloads(submissions, include_source=False,
+            queue_ranks=store.pending_queue_ranks(contest_id,
+                submission_ids=[s.submission_id for s in submissions if s.status == "waiting"]),
+            source_lengths=store.submission_source_lengths(ids), show_progress=_submission_progress_visible(contest))
+        if participant.get("is_preview"):
+            for payload in payloads:
+                payload["team_name"] = participant["team"].team_name
+                payload["member_name"] = participant["member"].name
+        return versions, payloads, any(submission.status in PENDING for submission in submissions)
+
+    versions, payloads, pending = await read_status_snapshot(snapshot)
+    if pending and wait_seconds:
+        await wait_for_submission_changes(versions, wait_seconds)
+        _, payloads, _ = await read_status_snapshot(snapshot)
+    return ok(request, payloads)
+
+
 @router.get("/contests/{contest_id}/submissions/{submission_id}")
 @request_database
 def submission_detail(contest_id: str, submission_id: str, request: Request):
@@ -880,16 +916,17 @@ async def wait_submission_status(
     def snapshot():
         participant = _require_contest_participant(request, contest_id)
         contest = store.get_contest(contest_id)
+        versions = submission_versions([submission_id])
         submission = store.get_submission(submission_id)
         if not contest or not submission or submission.contest_id != contest_id or not owns_submission(participant, submission):
             raise not_found()
         return submission, _participant_submission_payload(submission, include_source=True,
-            show_progress=_submission_progress_visible(contest))
+            show_progress=_submission_progress_visible(contest)), versions
 
-    submission, payload = await read_status_snapshot(snapshot)
+    submission, payload, versions = await read_status_snapshot(snapshot)
     if submission.status in PENDING:
-        await wait_for_submission(submission_id, min(max(wait_seconds, 0), 10))
-        submission, payload = await read_status_snapshot(snapshot)
+        await wait_for_submission_changes(versions, min(max(wait_seconds, 0), 2))
+        submission, payload, _ = await read_status_snapshot(snapshot)
     return ok(request, payload)
 
 

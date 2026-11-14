@@ -292,18 +292,23 @@ def record_result(item, status, compile_message, judge_message, failed_order, ru
     item.candidate_result = value
 
 
-def batch_summary(db, batch):
+def _batch_counts(db, batch_ids):
     # Aggregate in SQL so polling never transfers all source/result messages.
     from sqlalchemy import case
     state = Item.candidate_result["status"].as_string()
     old = Item.original_result["status"].as_string()
     score_changed = Item.candidate_result["score"].as_integer().is_distinct_from(Item.original_result["score"].as_integer())
     groups_changed = Item.candidate_result["subtask_results"].as_string().is_distinct_from(Item.original_result["subtask_results"].as_string())
-    counts = db.execute(select(func.count(),
+    rows = db.execute(select(Item.rejudging_id, func.count(),
         func.sum(case((state.in_(FINAL), 1), else_=0)),
         func.sum(case((state == "system_error", 1), else_=0)),
         func.sum(case((state.in_(FINAL) & ((state != old) | score_changed | groups_changed), 1), else_=0)),
-    ).where(Item.rejudging_id == batch.rejudging_id)).one()
+    ).where(Item.rejudging_id.in_(batch_ids)).group_by(Item.rejudging_id))
+    return {row[0]: tuple(row[1:]) for row in rows}
+
+
+def batch_summary(db, batch, *, counts=None):
+    counts = counts if counts is not None else _batch_counts(db, [batch.rejudging_id]).get(batch.rejudging_id, (0, 0, 0, 0))
     total, completed, errors, changed = (int(value or 0) for value in counts)
     status = batch.status
     if status == "pending" and completed == total:
@@ -314,6 +319,70 @@ def batch_summary(db, batch):
     )} | {"status": status, "total": total, "completed": completed, "system_errors": errors,
         "changed_verdicts": changed, "problem_code": batch.judge_context["problem"]["problem_code"],
         "problem_title": batch.judge_context["problem"]["title"]})
+
+
+def progress_payload(rejudging_id, candidate, *, batch_status="pending"):
+    current, total = candidate.get("progress_current"), candidate.get("progress_total")
+    percent = max(0, min(100, round(current / total * 100))) if (
+        isinstance(current, int) and isinstance(total, int) and total > 0) else None
+    status = candidate.get("status", "waiting")
+    return {"rejudging_id": rejudging_id, "status": status, "batch_status": batch_status,
+        "progress_current": current, "progress_total": total, "progress_percent": percent,
+        "progress_phase": candidate.get("progress_phase") if status == "judging" else None}
+
+
+def active_progress(store, cid, submission_ids):
+    if not submission_ids:
+        return {}
+    with store._session() as db:
+        candidate = Item.candidate_result
+        rows = list(db.execute(select(Item.active_submission_id, Item.rejudging_id,
+            candidate["status"].as_string(), candidate["progress_current"].as_integer(),
+            candidate["progress_total"].as_integer(), candidate["progress_phase"].as_string(),
+        ).join(Batch, Batch.rejudging_id == Item.rejudging_id).where(
+            Batch.contest_id == cid, Batch.status == "pending", Item.active_submission_id.in_(submission_ids))))
+        counts = _batch_counts(db, {row[1] for row in rows}) if rows else {}
+        def status(bid):
+            total, completed, errors, _ = counts.get(bid, (0, 0, 0, 0))
+            return ("blocked" if errors else "ready") if total == completed else "pending"
+        return {sid: progress_payload(bid, dict(zip(
+            ("status", "progress_current", "progress_total", "progress_phase"), values)), batch_status=status(bid))
+            for sid, bid, *values in rows}
+
+
+def applied_submissions(store, cid, submission_ids):
+    if not submission_ids:
+        return set()
+    with store._session() as db:
+        return set(db.scalars(select(Item.submission_id).join(Batch, Batch.rejudging_id == Item.rejudging_id).where(
+            Batch.contest_id == cid, Batch.status == "applied", Item.submission_id.in_(submission_ids)).distinct()))
+
+
+def submission_history(store, cid, submission_id, offset=0, limit=10):
+    """Keep official and candidate evidence distinct, including bulk requests."""
+    with store._session() as db:
+        exists = db.scalar(select(SubmissionRow.submission_id).where(
+            SubmissionRow.submission_id == submission_id, SubmissionRow.contest_id == cid,
+            SubmissionRow.submission_kind != "verification_trial"))
+        if not exists:
+            raise AppError(404, "not_found", "제출을 찾을 수 없습니다.")
+        query = select(Item, Batch).join(Batch, Batch.rejudging_id == Item.rejudging_id).where(
+            Item.submission_id == submission_id, Batch.contest_id == cid)
+        total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
+        rows = list(db.execute(query.order_by(Batch.created_at.desc(), Batch.rejudging_id.desc()).offset(offset).limit(limit)))
+        counts = _batch_counts(db, [batch.rejudging_id for _, batch in rows]) if rows else {}
+        items = []
+        for item, batch in rows:
+            summary = batch_summary(db, batch, counts=counts.get(batch.rejudging_id, (0, 0, 0, 0)))
+            items.append({**summary,
+                "original_result": item.original_result, "candidate_result": item.candidate_result,
+                "changed": item.candidate_result.get("status") in FINAL and any(
+                    item.original_result.get(key) != item.candidate_result.get(key) for key in ("status", "score", "subtask_results")),
+                "rejudging_progress": progress_payload(batch.rejudging_id, item.candidate_result,
+                    batch_status=summary["status"]) if batch.status == "pending" else None,
+            })
+        return jsonable_encoder({"items": items, "total": total, "offset": offset, "limit": limit,
+            "has_next": offset + limit < total})
 
 
 def list_batches(store, cid, offset=0, limit=20):

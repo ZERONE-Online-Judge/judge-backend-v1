@@ -30,6 +30,9 @@ from app.settings import settings
 from app.services.store import SERVICE_MASTER_OPERATOR_ERROR, _schedule_status, store
 from app.services.storage import object_storage
 from app.services.testcase_verifier import UploadedTestcase, build_verified_testcase_set, verify_active_testcases_with_candidate_asset
+from app.database import status_session
+from app.services.request_sessions import request_database
+from app.services.submission_status import PENDING, read_status_snapshot, submission_versions, wait_for_submission_changes
 
 router = APIRouter(tags=["operator"], route_class=ChangeNoticeRoute)
 
@@ -1203,27 +1206,7 @@ async def operator_submissions(
         limit=limit,
         cursor=cursor,
     )
-    teams = store.teams_by_ids([submission.participant_team_id for submission in submissions])
-    members = {
-        member.team_member_id: member
-        for team in teams.values()
-        for member in team.members
-    }
-    queue_rank_by_submission_id = store.pending_queue_ranks(contest_id=contest_id)
-    source_lengths = store.submission_source_lengths([submission.submission_id for submission in submissions])
-    items = []
-    for submission in submissions:
-        payload = submission.model_dump(mode="json")
-        team = teams.get(submission.participant_team_id)
-        member = members.get(submission.team_member_id)
-        payload["team_name"] = team.team_name if team else None
-        payload["member_name"] = member.name if member else None
-        payload["member_email"] = str(member.email) if member else None
-        payload["queue_position"] = queue_rank_by_submission_id.get(submission.submission_id)
-        payload["source_code_length"] = source_lengths.get(submission.submission_id, 0)
-        if not include_source:
-            payload["source_code"] = None
-        items.append(payload)
+    items = _operator_submission_payloads(contest_id, submissions, include_source=include_source)
     return page(
         request,
         items,
@@ -1234,21 +1217,88 @@ async def operator_submissions(
     )
 
 
+def _operator_submission_payloads(contest_id, submissions, *, include_source=False):
+    from app.services import rejudging
+    ids = [submission.submission_id for submission in submissions]
+    teams = store.teams_by_ids([submission.participant_team_id for submission in submissions])
+    members = {
+        member.team_member_id: member
+        for team in teams.values()
+        for member in team.members
+    }
+    queue_rank_by_submission_id = store.pending_queue_ranks(contest_id=contest_id,
+        submission_ids=[submission.submission_id for submission in submissions if submission.status == "waiting"])
+    source_lengths = store.submission_source_lengths(ids)
+    progress = rejudging.active_progress(store, contest_id, ids)
+    applied = rejudging.applied_submissions(store, contest_id, ids)
+    items = []
+    for submission in submissions:
+        payload = submission.model_dump(mode="json")
+        team = teams.get(submission.participant_team_id)
+        member = members.get(submission.team_member_id)
+        payload["team_name"] = team.team_name if team else None
+        payload["member_name"] = member.name if member else None
+        payload["member_email"] = str(member.email) if member else None
+        payload["queue_position"] = queue_rank_by_submission_id.get(submission.submission_id)
+        payload["source_code_length"] = source_lengths.get(submission.submission_id, 0)
+        payload["rejudging_progress"] = progress.get(submission.submission_id)
+        payload["rejudged"] = submission.submission_id in applied
+        if not include_source:
+            payload["source_code"] = None
+        items.append(payload)
+    return items
+
+
+@router.get("/operator/contests/{contest_id}/submissions:wait")
+async def operator_wait_submissions(
+    contest_id: str, request: Request,
+    submission_id: list[str] = Query(min_length=1, max_length=20),
+    wait_seconds: float = Query(default=2, ge=0, le=2),
+):
+    ids = list(dict.fromkeys(submission_id))
+
+    @request_database(session_factory=status_session)
+    def snapshot():
+        require_contest_staff(request, contest_id, "contest.submission.view")
+        # Fingerprint first: a concurrent update can cause an extra response,
+        # but cannot be missed between the payload read and subscription.
+        versions = submission_versions(ids)
+        submissions = store.submissions_by_ids(contest_id, ids)
+        if len(submissions) != len(ids):
+            raise not_found()
+        payloads = _operator_submission_payloads(contest_id, submissions)
+        pending = any(item["status"] in PENDING or (
+            item["rejudging_progress"] and item["rejudging_progress"]["status"] in PENDING) for item in payloads)
+        return versions, payloads, pending
+
+    versions, payloads, pending = await read_status_snapshot(snapshot)
+    if pending and wait_seconds:
+        await wait_for_submission_changes(versions, wait_seconds)
+        _, payloads, _ = await read_status_snapshot(snapshot)
+    return ok(request, payloads)
+
+
 @router.get("/operator/contests/{contest_id}/submissions/{submission_id}")
 async def operator_submission_detail(contest_id: str, submission_id: str, request: Request):
     require_contest_staff(request, contest_id, "contest.submission.view")
     submission = store.get_submission(submission_id)
     if not submission or submission.contest_id != contest_id:
         raise not_found()
-    team = store.teams_by_ids([submission.participant_team_id]).get(submission.participant_team_id)
-    member = next((item for item in (team.members if team else []) if item.team_member_id == submission.team_member_id), None)
-    payload = submission.model_dump(mode="json")
-    payload["team_name"] = team.team_name if team else None
-    payload["member_name"] = member.name if member else None
-    payload["member_email"] = str(member.email) if member else None
-    payload["queue_position"] = _submission_queue_position(contest_id, submission_id)
-    payload["source_code_length"] = len((submission.source_code or "").encode("utf-8"))
+    payload = _operator_submission_payloads(contest_id, [submission], include_source=True)[0]
     return ok(request, payload)
+
+
+@router.get("/operator/contests/{contest_id}/submissions/{submission_id}/rejudgings")
+async def submission_rejudgings(contest_id: str, submission_id: str, request: Request,
+    offset: int = Query(default=0, ge=0), limit: int = Query(default=10, ge=1, le=50)):
+    from app.services import rejudging
+
+    @request_database(session_factory=status_session)
+    def snapshot():
+        require_contest_staff(request, contest_id, "contest.submission.view")
+        return rejudging.submission_history(store, contest_id, submission_id, offset, limit)
+
+    return ok(request, await read_status_snapshot(snapshot))
 
 
 @router.post("/operator/contests/{contest_id}/submissions/{submission_id}/rejudge")
