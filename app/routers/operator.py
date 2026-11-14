@@ -1156,23 +1156,6 @@ async def update_participant_member(contest_id: str, participant_team_id: str, t
     return ok(request, member.model_dump(mode="json"))
 
 
-@router.post("/operator/contests/{contest_id}/participants/{participant_team_id}/members/{team_member_id}/sessions:revoke")
-async def revoke_participant_member_sessions(contest_id: str, participant_team_id: str, team_member_id: str, request: Request):
-    operator = require_contest_staff(request, contest_id, "contest.participant.manage")
-    member = store.revoke_team_member_sessions(contest_id, participant_team_id, team_member_id)
-    if not member:
-        raise not_found()
-    team = store.teams.get(participant_team_id)
-    write_access_log(
-        request, event_type="account_revoked", account_scope="participant",
-        email=str(member.email), display_name=member.name, contest_id=contest_id,
-        participant_team_id=participant_team_id, team_name=team.team_name if team else None,
-        team_member_id=team_member_id, member_name=member.name, actor_role="participant",
-        details={"revoked_by": str(operator.email), "scope": "account"},
-    )
-    return ok(request, member.model_dump(mode="json"))
-
-
 @router.get("/operator/contests/{contest_id}/submission-filters")
 async def submission_filters(contest_id: str, request: Request):
     require_contest_staff(request, contest_id, "contest.submission.view")

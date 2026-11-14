@@ -1651,7 +1651,7 @@ def test_general_participant_session_replaces_previous_token():
     assert current_session.status_code == 200
 
 
-def test_operator_revoke_blocks_existing_general_participant_reissue():
+def test_removed_operator_logout_preserves_participant_session():
     contest_id = first_contest_id()
     general = client.post(
         "/api/auth/general/otp/verify",
@@ -1678,19 +1678,19 @@ def test_operator_revoke_blocks_existing_general_participant_reissue():
         f"/api/operator/contests/{contest_id}/participants/{team['participant_team_id']}/members/{member['team_member_id']}/sessions:revoke",
         headers=auth_headers(operator["access_token"]),
     )
-    assert revoked.status_code == 200
+    assert revoked.status_code == 404
 
     old_session = client.get(
         f"/api/contests/{contest_id}/participant-session/me",
         headers=auth_headers(participant_token),
     )
-    assert old_session.status_code == 401
+    assert old_session.status_code == 200
 
     reissue = client.post(
         f"/api/auth/general/contests/{contest_id}/participant-session",
         headers=auth_headers(general_token),
     )
-    assert reissue.status_code == 401
+    assert reissue.status_code == 200
 
 
 def test_contest_resources_hidden_without_participant_during_contest():
@@ -2796,7 +2796,7 @@ def test_operator_deletes_participant_team_without_history():
     assert all(item["status"] == "canceled" for item in deleted_team_mail)
 
 
-def test_operator_manages_team_members_and_revokes_member_sessions():
+def test_operator_manages_team_members_without_ending_sessions():
     contest_id, login = participant_login()
     set_contest_mutable(contest_id)
     operator = staff_tokens("test4@zoj.com")
@@ -2831,16 +2831,8 @@ def test_operator_manages_team_members_and_revokes_member_sessions():
     assert updated.json()["data"]["name"] == "Renamed Member"
     assert updated.json()["data"]["email"] == renamed_email
 
-    leader = next(item for item in team["members"] if item["role"] == "leader")
-    revoked = client.post(
-        f"/api/operator/contests/{contest_id}/participants/{team['participant_team_id']}/members/{leader['team_member_id']}/sessions:revoke",
-        headers=auth_headers(operator["access_token"]),
-    )
-    assert revoked.status_code == 200
-    assert revoked.json()["data"]["active_sessions"] == 0
-
-    denied = client.get(f"/api/contests/{contest_id}/participant-session/me", headers=auth_headers(login["access_token"]))
-    assert denied.status_code == 401
+    session = client.get(f"/api/contests/{contest_id}/participant-session/me", headers=auth_headers(login["access_token"]))
+    assert session.status_code == 200
 
 
 def test_submission_rejects_problem_from_other_division():

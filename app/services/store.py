@@ -3882,31 +3882,6 @@ class DbStore:
                 last_login_at=_aware(row.last_login_at),
             )
 
-    def revoke_team_member_sessions(self, contest_id: str, participant_team_id: str, team_member_id: str) -> TeamMember | None:
-        with self._session() as db:
-            member = db.scalar(
-                select(TeamMemberRow).where(
-                    TeamMemberRow.contest_id == contest_id,
-                    TeamMemberRow.participant_team_id == participant_team_id,
-                    TeamMemberRow.team_member_id == team_member_id,
-                )
-            )
-            if not member:
-                return None
-            # A forced logout invalidates the account's login, refresh tokens,
-            # and participant sessions across contests and devices together.
-            self._revoke_active_login_sessions_for_email(db, member.email)
-            db.commit()
-            db.refresh(member)
-            return TeamMember(
-                team_member_id=member.team_member_id,
-                role=TeamMemberRole(member.role),
-                name=member.name,
-                email=member.email,
-                active_sessions=member.active_sessions,
-                last_login_at=_aware(member.last_login_at),
-            )
-
     def create_problem(
         self,
         contest_id: str,

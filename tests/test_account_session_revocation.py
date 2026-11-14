@@ -55,22 +55,16 @@ def context():
     return {"email": email, "contests": contests, "general": general, "other": other, "tokens": participant_tokens, "second": second_device}
 
 
-def revoke(context):
-    cid, team, _ = context["contests"][0]
-    operator = login("test3@zoj.com")
-    response = client.post(
-        f"/api/operator/contests/{cid}/participants/{team.participant_team_id}/members/{team.members[0].team_member_id}/sessions:revoke",
-        headers=headers(operator["access_token"]),
-    )
-    assert response.status_code == 200, response.text
-    assert response.json()["data"]["active_sessions"] == 0
+def replace_login(context):
+    # The account owner can still confirm moving their login to a new device.
+    return login(context["email"])
 
 
-def test_forced_logout_revokes_account_across_devices_and_contests(context):
+def test_confirmed_new_login_revokes_old_sessions_across_devices_and_contests(context):
     c = context
     for cid, _, _ in c["contests"]:
         assert client.get(f"/api/contests/{cid}/problems", headers=headers(c["general"]["access_token"])).status_code == 200
-    revoke(c)
+    replace_login(c)
     for session in (c["general"], c["second"]):
         assert client.get("/api/auth/general/me", headers=headers(session["access_token"])).status_code == 401
         assert client.post("/api/auth/general/refresh", json={"refresh_token": session["refresh_token"]}).status_code == 401
@@ -83,7 +77,7 @@ def test_forced_logout_revokes_account_across_devices_and_contests(context):
         assert client.post(f"/api/contests/{cid}/problems/{problem.problem_id}/submissions", headers=headers(token), json={"language": "cpp17", "source_code": "int main(){}"}).status_code == 401
         assert store.teams[team.participant_team_id].members[0].active_sessions == 0
     assert client.get("/api/auth/general/me", headers=headers(c["other"]["access_token"])).status_code == 200
-    # Forced logout is not an account ban: a fresh verified login can reenter.
+    # Replacing a login is not an account ban: a verified login can reenter.
     fresh = login(c["email"])
     assert client.post(f"/api/auth/general/contests/{c['contests'][0][0]}/participant-session", headers=headers(fresh["access_token"])).status_code == 200
 
@@ -104,7 +98,7 @@ def test_session_watch_survives_token_refresh_and_reports_revocation(context):
     async def verify_events():
         events = session_events(Connected(), watch)
         assert "event: ready" in await anext(events)
-        revoke(context)
+        replace_login(context)
         assert "event: session_revoked" in await anext(events)
         with pytest.raises(StopAsyncIteration):
             await anext(events)
@@ -115,7 +109,7 @@ def test_session_watch_survives_token_refresh_and_reports_revocation(context):
     assert client.get("/api/auth/session-events", headers=headers("invalid")).status_code == 401
 
 
-def test_forced_logout_also_revokes_legacy_staff_session(context):
+def test_confirmed_new_login_also_revokes_legacy_staff_session(context):
     other = store.create_contest("Staff", "Test", "Test")
     account = store.upsert_contest_operator(other.contest_id, context["email"], "Target", ["master"])
     with store._session() as db:
@@ -123,7 +117,7 @@ def test_forced_logout_also_revokes_legacy_staff_session(context):
         legacy = store._issue_staff_session(db, row)
     watch = resolve_session_watch(legacy["access_token"])
     assert watch and session_watch_active(watch)
-    revoke(context)
+    replace_login(context)
     assert store.get_staff_by_access_token(legacy["access_token"]) is None
     assert store.refresh_staff_session(legacy["refresh_token"]) is None
     assert not session_watch_active(watch)

@@ -310,7 +310,7 @@ def _audit_path_entities(path: str) -> dict[str, str]:
         ),
         (r"^/api/operator/contests/([^/]+)/participants/([^/]+)(?:/access|/withdrawal)?$", ["contest_id", "participant_team_id"]),
         (
-            r"^/api/operator/contests/([^/]+)/participants/([^/]+)/members/([^/]+)(?:/sessions:revoke|/access)?$",
+            r"^/api/operator/contests/([^/]+)/participants/([^/]+)/members/([^/]+)(?:/access)?$",
             ["contest_id", "participant_team_id", "team_member_id"],
         ),
         (r"^/api/operator/contests/([^/]+)/problems/([^/]+)$", ["contest_id", "problem_id"]),
