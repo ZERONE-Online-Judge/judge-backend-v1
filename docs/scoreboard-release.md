@@ -32,6 +32,14 @@ processes that cell chronologically through its first accepted submission or
 all failures. Later submissions on a solved cell require no further action.
 Compilation and infrastructure failures do not add wrong-attempt penalties.
 
+New ICPC standings rank teams by solved count descending, total penalty
+ascending, then the timestamp of the last accepted submission ascending.
+Equal values across all three criteria share a rank; team names only stabilize
+display order. Unsolved-problem attempts never break ties. New resolver states
+capture this ranking policy. Saved final snapshots and announcements already
+in progress retain their original policy through advance, undo and resume;
+they are not silently rewritten when the live ranking policy changes.
+
 Each action commits the whole cell and new ranking in one transaction. The
 contest row lock and expected revision/step reject concurrent stale actions.
 An undo delta stores the previous team row and every removed event with its

@@ -25,6 +25,7 @@ from app.presentation_alerts import PRESENTATION_ALERT_FIELDS, default_alert_min
 from app.judge_languages import DEFAULT_LANGUAGES, LANGUAGES, NEW_LANGUAGES, RUNTIME_CAPABILITY, require_allowed, validate_languages
 from app.services.package_builder import is_editor_source_asset
 from app.services.problem_order import PROBLEM_ORDER_POLICY, problem_code_sort_key
+from app.services import icpc_ranking
 from app.models import (
     AccessLog,
     Contest,
@@ -4756,28 +4757,30 @@ class DbStore:
                 **({"score": submission.score, "subtask_results": submission.subtask_results,
                     "submission_id": submission.submission_id} if contest.scoring_mode == "ioi" else {}),
             })
-        return {"version": 2, "rows": rows, "pending": pending, "step": 0,
+        return {"version": 2, "ranking_policy": icpc_ranking.ICPC_RANKING_POLICY,
+                "rows": rows, "pending": pending, "step": 0,
                 "total_steps": len({(event["team_id"], event["problem_id"]) for event in pending}), "last_event": None}
 
     @staticmethod
-    def _rank_resolver_rows(rows: list[dict]) -> None:
+    def _rank_resolver_rows(rows: list[dict], *, ranking_policy: str | None = icpc_ranking.ICPC_RANKING_POLICY) -> None:
         if rows and rows[0].get("scoring_mode") == "ioi":
             scoring.rank_rows(rows)
             return
-        def rank_key(row: dict) -> tuple:
+        if ranking_policy == icpc_ranking.ICPC_RANKING_POLICY:
+            icpc_ranking.rank_rows(rows)
+            return
+        # An announcement already in progress must keep the policy captured
+        # with its final snapshot, including when advancing or undoing it.
+        def legacy_key(row: dict) -> tuple:
             return (-row["solved"], row["penalty"], sum(score["attempts"] for score in row["problem_scores"] if not score["solved"]))
         rows.sort(key=lambda row: (
-            *rank_key(row),
-            datetime.fromisoformat(row["last_solved_at"]) if row.get("last_solved_at") else datetime.max.replace(tzinfo=timezone.utc),
-            row["team_name"],
+            *legacy_key(row), icpc_ranking.rank_key(row)[2], row["team_name"],
         ))
-        previous_key = None
-        rank = 0
+        previous_key, rank = None, 0
         for index, row in enumerate(rows, start=1):
-            key = rank_key(row)
+            key = legacy_key(row)
             if key != previous_key:
-                rank = index
-                previous_key = key
+                previous_key, rank = key, index
             row["rank"] = rank
 
     @staticmethod
@@ -4844,7 +4847,7 @@ class DbStore:
         row["submission_count"] += len(events)
         state["pending"] = [event for event in pending if (event["team_id"], event["problem_id"]) != (row["team_id"], score["problem_id"])]
         state["step"] += 1
-        self._rank_resolver_rows(state["rows"])
+        self._rank_resolver_rows(state["rows"], ranking_policy=state.get("ranking_policy"))
         state["last_event"] = {
             "team_id": row["team_id"], "team_name": row["team_name"],
             "problem_code": score["problem_code"], "status": last_status,
@@ -4892,7 +4895,7 @@ class DbStore:
                     state.pop("version", None)
                 state["rows"] = [inverse["row"] if row["team_id"] == inverse["row"]["team_id"] else row for row in state["rows"]]
                 state.update(step=inverse["step"], last_event=inverse["last_event"])
-                self._rank_resolver_rows(state["rows"])
+                self._rank_resolver_rows(state["rows"], ranking_policy=state.get("ranking_policy"))
                 release.resolver_state = state
             release.undo_history = None if entry.get("legacy_base") and not history else history
 
@@ -5118,7 +5121,7 @@ class DbStore:
                 ScoreboardReleaseRow.contest_id == contest_id).order_by(ScoreboardReleaseRow.division_id)).all()
                 if public_view and division_id is None else None)
             cutoff = self._public_scoreboard_cutoff(contest, now_utc(), release) if public_view else None
-            identity = [PROBLEM_ORDER_POLICY, contest_id, division_id, public_view, ended, cutoff, settings.feature_public_scoreboard_penalty,
+            identity = [PROBLEM_ORDER_POLICY, icpc_ranking.ICPC_RANKING_POLICY, contest_id, division_id, public_view, ended, cutoff, settings.feature_public_scoreboard_penalty,
                         [contest.status, contest.start_at, contest.end_at, contest.freeze_at,
                          contest.scoring_mode, contest.scoreboard_freeze_mode, contest.scoreboard_frozen_at,
                          contest.scoreboard_release_mode, contest.freeze_submission_count_visible],
@@ -5279,7 +5282,6 @@ class DbStore:
                 total_penalty = 0
                 solved = 0
                 last_solved_at = None
-                unresolved_attempts = 0
                 for problem in problems:
                     accepted = accepted_by_team_problem.get((team.participant_team_id, problem.problem_id))
                     stats = problem_attempts_by_team.get((team.participant_team_id, problem.problem_id))
@@ -5291,8 +5293,6 @@ class DbStore:
                         last_solved_at = accepted["submitted_at"]
                     attempts = int(stats["attempts"]) if stats else 0
                     wrong_attempts = int(stats["wrong_before_solved"]) if solved_problem and stats else attempts
-                    if not solved_problem:
-                        unresolved_attempts += attempts
                     problem_scores.append(
                         {
                             "problem_id": problem.problem_id,
@@ -5319,31 +5319,14 @@ class DbStore:
                         "submission_count": submission_count_by_team.get(team.participant_team_id, 0),
                         "last_solved_at": last_solved_at,
                         "problem_scores": problem_scores,
-                        "_unresolved_attempts": unresolved_attempts,
                     }
                 )
 
-            def rank_key(row: dict) -> tuple:
-                return (-row["solved"], row["penalty"], row["_unresolved_attempts"])
-
-            rows.sort(
-                key=lambda row: (
-                    *rank_key(row),
-                    row["last_solved_at"] or datetime.max.replace(tzinfo=timezone.utc),
-                    row["team_name"],
-                )
-            )
             if contest.scoring_mode == "ioi":
                 scoring.project(rows, submissions, problems)
-            previous_key = None
-            current_rank = 0
-            for index, row in enumerate(rows, start=1):
-                current_key = (row["total_score"],) if contest.scoring_mode == "ioi" else rank_key(row)
-                if current_key != previous_key:
-                    current_rank = index
-                    previous_key = current_key
-                row["rank"] = current_rank
-                row.pop("_unresolved_attempts", None)
+            else:
+                icpc_ranking.rank_rows(rows)
+            for row in rows:
                 if public_view:
                     if not settings.feature_public_scoreboard_penalty:
                         row["penalty"] = None

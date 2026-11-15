@@ -3529,7 +3529,7 @@ def test_scoreboard_uses_icpc_attempt_policy_per_problem():
     assert score["wrong_attempts"] == 3
     assert score["best_submission_id"] == retry_id
 
-def test_scoreboard_ties_zero_solve_and_orders_wrong_only_below_no_submit():
+def test_scoreboard_ties_zero_solve_regardless_of_wrong_attempts():
     contest_id, login = participant_login()
     set_contest_mutable(contest_id)
     operator = staff_tokens("test4@zoj.com")
@@ -3543,7 +3543,7 @@ def test_scoreboard_ties_zero_solve_and_orders_wrong_only_below_no_submit():
             "division_id": division_id,
             "problem_code": f"T{uuid4().hex[:6]}",
             "title": "Zero Solve Tie Policy",
-            "statement": "Scoreboard should tie no-submit teams and rank wrong-only teams below.",
+            "statement": "Scoreboard should tie all zero-solve teams regardless of attempts.",
             "time_limit_ms": 1000,
             "memory_limit_mb": 512,
             "display_order": 121,
@@ -3609,7 +3609,7 @@ def test_scoreboard_ties_zero_solve_and_orders_wrong_only_below_no_submit():
     assert no_submit_a["solved"] == no_submit_b["solved"] == wrong_only["solved"] == 0
     assert no_submit_a["penalty"] == no_submit_b["penalty"] == wrong_only["penalty"] == 0
     assert no_submit_a["rank"] == no_submit_b["rank"]
-    assert no_submit_a["rank"] < wrong_only["rank"]
+    assert no_submit_a["rank"] == wrong_only["rank"]
 
 
 def test_manual_rejudge_api_is_not_available_to_service_master_or_operator():
