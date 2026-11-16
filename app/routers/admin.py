@@ -2,7 +2,7 @@ import asyncio
 from datetime import datetime, timedelta
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Query, Request, Response
+from fastapi import APIRouter, Depends, Path, Query, Request, Response
 from pydantic import BaseModel, EmailStr, Field, StrictBool, ConfigDict, field_validator, model_validator
 
 from app.models import ContestStatus, ContestVisibility, JudgeNode, now_utc
@@ -15,8 +15,35 @@ from app.services.mail_templates import absolute_url, format_korean_datetime, op
 from app.services.mail_logs import list_mail_logs, mail_log_filters, mail_log_preview
 from app.services.responses import ok, page
 from app.services.store import SERVICE_MASTER_OPERATOR_ERROR, store
+from app.services import admin_editor_jobs
 
 router = APIRouter(tags=["admin"])
+
+
+@router.get("/admin/judge/editor-jobs")
+async def editor_jobs(
+    request: Request, response: Response,
+    page: int = Query(default=1, ge=1, le=1000000),
+    page_size: int = Query(default=20, ge=1, le=100),
+    q: str = Query(default="", max_length=200),
+    kind: admin_editor_jobs.JobKind = "all",
+    category: admin_editor_jobs.JobCategory = "all",
+    status: admin_editor_jobs.JobStatus = "all",
+):
+    account = require_service_master(request)
+    response.headers["Cache-Control"] = "no-store"
+    return ok(request, await admin_editor_jobs.read(str(account.email), page=page, page_size=page_size,
+        q=q, kind=kind, category=category, status=status))
+
+
+@router.get("/admin/judge/editor-jobs/{job_id}")
+async def editor_job(
+    request: Request, response: Response,
+    job_id: str = Path(pattern=r"^[a-f0-9]{32}$"),
+):
+    account = require_service_master(request)
+    response.headers["Cache-Control"] = "no-store"
+    return ok(request, await admin_editor_jobs.read(str(account.email), job_id=job_id))
 
 
 def _page_slice(items: list, limit: int, cursor: str | None) -> tuple[list, str | None]:
