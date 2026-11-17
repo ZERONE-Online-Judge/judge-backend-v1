@@ -82,7 +82,7 @@ def create_direct(body):
 def test_twelve_solutions_register_while_one_upload_is_slow(short_lock_timeout, monkeypatch):
     entered, release = threading.Event(), threading.Event()
     lock = threading.Lock()
-    write = object_storage.write_bytes
+    write = object_storage.write_stream
     def slow_first(key, *args, **kwargs):
         with lock:
             first = not entered.is_set()
@@ -91,7 +91,7 @@ def test_twelve_solutions_register_while_one_upload_is_slow(short_lock_timeout, 
         if first:
             assert release.wait(10), 'Test did not release the paused upload'
         return write(key, *args, **kwargs)
-    monkeypatch.setattr(object_storage, 'write_bytes', slow_first)
+    monkeypatch.setattr(object_storage, 'write_stream', slow_first)
     node_id = node()
     project = uuid4().hex
     def body():
@@ -119,14 +119,14 @@ def test_twelve_solutions_register_while_one_upload_is_slow(short_lock_timeout, 
 
 def test_storage_failure_resumes_same_reservation_and_keeps_shared_objects(database, monkeypatch):
     body = snapshot()
-    write = object_storage.write_bytes
+    write = object_storage.write_stream
     calls = []
     def fail_after_bundle(key, *args, **kwargs):
         calls.append(key)
         if len(calls) == 2:
             raise OSError('temporary storage outage')
         return write(key, *args, **kwargs)
-    monkeypatch.setattr(object_storage, 'write_bytes', fail_after_bundle)
+    monkeypatch.setattr(object_storage, 'write_stream', fail_after_bundle)
     with pytest.raises(AppError) as failure:
         create_direct(body)
     assert failure.value.status_code == 503
@@ -135,7 +135,7 @@ def test_storage_failure_resumes_same_reservation_and_keeps_shared_objects(datab
         assert row.status == 'uploading'
         run_id, bundle = row.run_id, row.payload['bundle_key']
     assert object_storage.size_bytes(bundle) is not None
-    monkeypatch.setattr(object_storage, 'write_bytes', write)
+    monkeypatch.setattr(object_storage, 'write_stream', write)
     result = create_direct(body)
     assert result['id'] == run_id and result['status'] == 'waiting'
     assert create_direct(body)['id'] == run_id
@@ -152,20 +152,20 @@ def test_upload_reservations_count_towards_personal_quota(database, monkeypatch)
             db.add(Run(operation_key=uuid4().hex, owner_id=account.account_id, project_id='a' * 32,
                        fingerprint='b' * 64, payload={}, storage_keys=[], testcase_count=1, status='uploading'))
         db.commit()
-    monkeypatch.setattr(object_storage, 'write_bytes', lambda *args, **kwargs: pytest.fail('Quota must precede storage'))
+    monkeypatch.setattr(object_storage, 'write_stream', lambda *args, **kwargs: pytest.fail('Quota must precede storage'))
     with pytest.raises(AppError) as failure:
         create_direct(snapshot())
     assert failure.value.status_code == 429
 
 
 def test_cancel_during_upload_never_requeues_it(database, monkeypatch):
-    write = object_storage.write_bytes
+    write = object_storage.write_stream
     def cancel_then_write(key, *args, **kwargs):
         with database() as db:
             run_id = db.scalar(select(Run.run_id))
         judging.get_run(EMAIL, run_id, cancel=True)
         return write(key, *args, **kwargs)
-    monkeypatch.setattr(object_storage, 'write_bytes', cancel_then_write)
+    monkeypatch.setattr(object_storage, 'write_stream', cancel_then_write)
     assert create_direct(snapshot())['status'] == 'cancelled'
 
 
@@ -390,6 +390,25 @@ def test_invalid_zip_paths_hashes_and_languages_are_rejected(database):
     body = snapshot()
     path = "/api/editor/judge/runs"
     assert client.post(path, content=body, headers=headers("POST", path, b"other")).status_code == 401
+    with database() as db:
+        assert db.scalar(select(func.count()).select_from(Run)) == 0
+
+
+def test_repeated_blob_references_respect_expanded_limit(database, monkeypatch):
+    shared = b'x\n' * 128
+    sha = hashlib.sha256(shared).hexdigest()
+    def change(manifest, files):
+        manifest['testcases'] = [
+            {'index': index, 'input_sha': sha, 'answer_sha': sha}
+            for index in range(1, 11)
+        ]
+        referenced = {manifest['source']['sha256'], manifest['resources'][0]['sha256']}
+        for name in list(files):
+            if name.removeprefix('blobs/') not in referenced:
+                del files[name]
+        files['blobs/' + sha] = shared
+    monkeypatch.setattr(judging, 'MAX_CONTENT', 4096)
+    assert submit(snapshot(change=change)).status_code == 422
     with database() as db:
         assert db.scalar(select(func.count()).select_from(Run)) == 0
 

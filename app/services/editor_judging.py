@@ -1,4 +1,5 @@
 """Authenticated Editor snapshots dispatched to the existing judge protocol."""
+import codecs
 import gzip
 import base64
 import copy
@@ -8,6 +9,7 @@ import json
 import re
 import stat
 import threading
+import tempfile
 import time
 import zipfile
 from datetime import timedelta, timezone
@@ -23,6 +25,7 @@ from app.judge_timing import TIMING_FIELDS, TimingEvidence
 from app.models import JUDGE_FINAL_STATUSES, now_utc
 from app.orm_models import EditorJudgeRunRow as Run, IdentityAccountRow, JudgeNodeRow
 from app.services.errors import AppError
+from app.services.editor_protocol import preflight_zip
 from app.services.node_credentials import valid_node_credential
 from app.services.storage import object_storage
 from app.settings import settings
@@ -34,6 +37,9 @@ ACTIVE = {"uploading", "waiting", "preparing", "judging"}
 RUNNING = {"preparing", "judging"}
 MAX_ARCHIVE = 512 * 1024**2
 MAX_CONTENT = 512 * 1024**2
+MAX_ARCHIVE_ENTRIES = 2102
+MAX_DIRECTORY_BYTES = 1024**2
+ARCHIVE_CHUNK_BYTES = 1024**2
 HASH = r"^[a-f0-9]{64}$"
 FULL_VERIFICATION = "editor-judge-full-v1"
 SUBTASKS = "zoj-judge-subtasks-v1"
@@ -162,55 +168,111 @@ def capabilities():
         }
 
 
-def create(email, source, fingerprint):
-    """Validate every byte before storage; the signed caller supplies no URLs."""
+def _member_digest(archive, name):
+    digest = hashlib.sha256()
+    with archive.open(name) as source:
+        while chunk := source.read(ARCHIVE_CHUNK_BYTES):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _write_json_stream(target, source):
+    decoder = codecs.getincrementaldecoder("utf-8-sig")()
+    target.write(b'"')
+    while chunk := source.read(ARCHIVE_CHUNK_BYTES):
+        text = decoder.decode(chunk)
+        if text:
+            target.write(json.dumps(text, ensure_ascii=False)[1:-1].encode())
+    text = decoder.decode(b"", final=True)
+    if text:
+        target.write(json.dumps(text, ensure_ascii=False)[1:-1].encode())
+    target.write(b'"')
+
+
+def _write_json_member(target, archive, name):
+    with archive.open(name) as source:
+        _write_json_stream(target, source)
+
+
+def _snapshot_data(source):
     source.seek(0, 2)
     if source.tell() > MAX_ARCHIVE:
         raise AppError(413, "editor_judge_archive_large", "채점 자료 ZIP은 512MiB 이하여야 합니다.")
+    preflight_zip(source, max_entries=MAX_ARCHIVE_ENTRIES, max_directory_bytes=MAX_DIRECTORY_BYTES)
     source.seek(0)
+    bundle = tempfile.TemporaryFile("w+b")
     try:
-        archive = zipfile.ZipFile(source)
-        entries = archive.infolist()
-        if len(entries) > 2102 or len({i.filename for i in entries}) != len(entries):
-            raise ValueError("Duplicate or too many archive entries")
-        if sum(i.file_size for i in entries) > MAX_CONTENT:
-            raise ValueError("Expanded snapshot exceeds 512MiB")
-        for entry in entries:
-            mode = entry.external_attr >> 16
-            if entry.flag_bits & 1 or (stat.S_IFMT(mode) and not stat.S_ISREG(mode)):
-                raise ValueError("Only unencrypted regular files are allowed")
-            if entry.filename != "manifest.json" and not re.fullmatch(r"blobs/[a-f0-9]{64}", entry.filename):
-                raise ValueError("Unsafe snapshot archive path")
-        if archive.getinfo("manifest.json").file_size > 2 * 1024**2:
-            raise ValueError("Snapshot manifest exceeds 2MiB")
-        snapshot = Snapshot.model_validate_json(archive.read("manifest.json"))
-        if len({c.index for c in snapshot.testcases}) != len(snapshot.testcases):
-            raise ValueError("Duplicate testcase order")
-        if sum(r.role == "checker" for r in snapshot.resources) != 1 or len({r.name for r in snapshot.resources}) != len(snapshot.resources):
-            raise ValueError("Exactly one checker and unique resource filenames are required")
-        hashes = {snapshot.source.sha256}
-        hashes.update(s for c in snapshot.testcases for s in (c.input_sha, c.answer_sha))
-        hashes.update(r.sha256 for r in snapshot.resources)
-        if {i.filename for i in entries} != {"manifest.json", *("blobs/" + s for s in hashes)}:
-            raise ValueError("Snapshot files do not match the manifest")
-        content = {}
-        for sha in hashes:
-            if archive.getinfo("blobs/" + sha).file_size > 128 * 1024**2:
+        with zipfile.ZipFile(source) as archive:
+            entries = archive.infolist()
+            names = {entry.filename for entry in entries}
+            if len(entries) > MAX_ARCHIVE_ENTRIES or len(names) != len(entries):
+                raise ValueError("Duplicate or too many archive entries")
+            if sum(entry.file_size for entry in entries) > MAX_CONTENT:
+                raise ValueError("Expanded snapshot exceeds 512MiB")
+            for entry in entries:
+                mode = entry.external_attr >> 16
+                if entry.flag_bits & 1 or entry.compress_type not in {zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED} or (stat.S_IFMT(mode) and not stat.S_ISREG(mode)):
+                    raise ValueError("Only unencrypted regular files are allowed")
+                if entry.filename != "manifest.json" and not re.fullmatch(r"blobs/[a-f0-9]{64}", entry.filename):
+                    raise ValueError("Unsafe snapshot archive path")
+            if archive.getinfo("manifest.json").file_size > 2 * 1024**2:
+                raise ValueError("Snapshot manifest exceeds 2MiB")
+            snapshot = Snapshot.model_validate_json(archive.read("manifest.json"))
+            if len({case.index for case in snapshot.testcases}) != len(snapshot.testcases):
+                raise ValueError("Duplicate testcase order")
+            if sum(resource.role == "checker" for resource in snapshot.resources) != 1 or len({resource.name for resource in snapshot.resources}) != len(snapshot.resources):
+                raise ValueError("Exactly one checker and unique resource filenames are required")
+            hashes = {snapshot.source.sha256}
+            hashes.update(sha for case in snapshot.testcases for sha in (case.input_sha, case.answer_sha))
+            hashes.update(resource.sha256 for resource in snapshot.resources)
+            if names != {"manifest.json", *("blobs/" + sha for sha in hashes)}:
+                raise ValueError("Snapshot files do not match the manifest")
+            sizes = {sha: archive.getinfo("blobs/" + sha).file_size for sha in hashes}
+            if any(size > 128 * 1024**2 for size in sizes.values()):
                 raise ValueError("A snapshot file exceeds 128MiB")
-            blob = archive.read("blobs/" + sha)
-            if hashlib.sha256(blob).hexdigest() != sha:
-                raise ValueError("Snapshot content hash mismatch")
-            content[sha] = blob
-        if len(content[snapshot.source.sha256]) > 1024**2:
-            raise ValueError("Solution source exceeds 1MiB")
-        code = content[snapshot.source.sha256].decode("utf-8-sig")
-        cases = [
-            {"display_order": c.index, "input_text": content[c.input_sha].decode("utf-8-sig"),
-             "output_text": content[c.answer_sha].decode("utf-8-sig")}
-            for c in sorted(snapshot.testcases, key=lambda c: c.index)
-        ]
+            logical_size = sizes[snapshot.source.sha256]
+            logical_size += sum(sizes[case.input_sha] + sizes[case.answer_sha] for case in snapshot.testcases)
+            logical_size += sum(sizes[resource.sha256] for resource in snapshot.resources)
+            if logical_size > MAX_CONTENT:
+                raise ValueError("Expanded snapshot references exceed 512MiB")
+            for sha in hashes:
+                if _member_digest(archive, "blobs/" + sha) != sha:
+                    raise ValueError("Snapshot content hash mismatch")
+            if sizes[snapshot.source.sha256] > 1024**2:
+                raise ValueError("Solution source exceeds 1MiB")
+            code = archive.read("blobs/" + snapshot.source.sha256).decode("utf-8-sig")
+
+            with gzip.GzipFile(fileobj=bundle, mode="wb", mtime=0) as target:
+                target.write(b'{"testcases":[')
+                for index, case in enumerate(sorted(snapshot.testcases, key=lambda item: item.index)):
+                    if index:
+                        target.write(b",")
+                    target.write(b'{"display_order":' + str(case.index).encode() + b',"input_text":')
+                    _write_json_member(target, archive, "blobs/" + case.input_sha)
+                    target.write(b',"output_text":')
+                    _write_json_member(target, archive, "blobs/" + case.answer_sha)
+                    target.write(b"}")
+                target.write(b"]}")
+        bundle.seek(0)
+        return snapshot, code, bundle
+    except Exception:
+        bundle.close()
+        raise
+
+
+def create(email, source, fingerprint):
+    """Validate every byte before storage; the signed caller supplies no URLs."""
+    try:
+        snapshot, code, bundle = _snapshot_data(source)
     except (ValueError, KeyError, UnicodeError, zipfile.BadZipFile, RuntimeError, ValidationError) as error:
         raise AppError(422, "editor_judge_snapshot_invalid", "채점 자료 형식·파일 무결성을 확인하세요.") from error
+    try:
+        return _create_validated(email, source, fingerprint, snapshot, code, bundle)
+    finally:
+        bundle.close()
+
+
+def _create_validated(email, source, fingerprint, snapshot, code, bundle):
     caps = capabilities()
     if snapshot.scoring_mode == "ioi":
         if not snapshot.collect_all_results:
@@ -258,7 +320,7 @@ def create(email, source, fingerprint):
         row = existing
         if not row:
             row = Run(operation_key=operation, owner_id=account.account_id, dataset_key=dataset_key, project_id=snapshot.project_id,
-                      fingerprint=fingerprint, testcase_count=len(cases), storage_keys=written, status="uploading",
+                      fingerprint=fingerprint, testcase_count=len(snapshot.testcases), storage_keys=written, status="uploading",
                       payload={"language": snapshot.source.language, "source_code": code,
                                "source_name": snapshot.source.name, "context_hash": snapshot.context_hash,
                                "time_limit_ms": snapshot.time_limit_ms, "memory_limit_mb": snapshot.memory_limit_mb,
@@ -276,10 +338,17 @@ def create(email, source, fingerprint):
 
     try:
         if object_storage.size_bytes(bundle_key) is None:
-            object_storage.write_bytes(bundle_key, gzip.compress(json.dumps({"testcases": cases}, ensure_ascii=False).encode(), mtime=0), "application/gzip")
-        for sha in hashes:
-            if object_storage.size_bytes(prefix + sha) is None:
-                object_storage.write_bytes(prefix + sha, content[sha])
+            bundle.seek(0, 2)
+            bundle_size = bundle.tell()
+            bundle.seek(0)
+            object_storage.write_stream(bundle_key, bundle, bundle_size, "application/gzip")
+        source.seek(0)
+        with zipfile.ZipFile(source) as archive:
+            for sha in hashes:
+                if object_storage.size_bytes(prefix + sha) is None:
+                    info = archive.getinfo("blobs/" + sha)
+                    with archive.open(info) as blob:
+                        object_storage.write_stream(prefix + sha, blob, info.file_size, "application/octet-stream")
     except Exception as error:
         # Keep the reservation so an identical retry can finish the upload.
         # Deleting shared content here could break a concurrent solution run.
@@ -335,14 +404,30 @@ def resume(email, parent_id, operation_id):
         excluded = set(payload["excluded_orders"]) | {failed}
         if object_storage.size_bytes(payload["base_bundle_key"]) is None:
             raise AppError(410, "editor_judge_snapshot_expired", "임시 채점 자료가 만료되었습니다. 새 검증을 요청하세요.")
-        all_cases = json.loads(gzip.decompress(object_storage.read_bytes(payload["base_bundle_key"])))['testcases']
-        remaining = [c for c in all_cases if c['display_order'] not in excluded]
+        remaining = [case for case in payload["testcases"] if case["display_order"] not in excluded]
         if len(remaining) != parent.testcase_count - 1:
             raise AppError(409, "editor_judge_snapshot_changed", "보관된 테스트 자료의 개수가 다릅니다.")
         key = "editor-judge/" + account.account_id + "/variants/" + operation + "-" + fingerprint + ".json.gz"
-        object_storage.write_bytes(key, gzip.compress(json.dumps({"testcases": remaining}, ensure_ascii=False).encode(), mtime=0), "application/gzip")
+        with tempfile.TemporaryFile("w+b") as bundle:
+            with gzip.GzipFile(fileobj=bundle, mode="wb", mtime=0) as target:
+                target.write(b'{"testcases":[')
+                for index, case in enumerate(remaining):
+                    if index:
+                        target.write(b",")
+                    target.write(b'{"display_order":' + str(case["display_order"]).encode() + b',"input_text":')
+                    with object_storage.open_reader(case["input_storage_key"]) as input_source:
+                        _write_json_stream(target, input_source)
+                    target.write(b',"output_text":')
+                    with object_storage.open_reader(case["output_storage_key"]) as output_source:
+                        _write_json_stream(target, output_source)
+                    target.write(b"}")
+                target.write(b"]}")
+            bundle.seek(0, 2)
+            bundle_size = bundle.tell()
+            bundle.seek(0)
+            object_storage.write_stream(key, bundle, bundle_size, "application/gzip")
         payload["bundle_key"], payload["excluded_orders"] = key, sorted(excluded)
-        payload["testcases"] = [c for c in payload["testcases"] if c["display_order"] != failed]
+        payload["testcases"] = remaining
         row = Run(operation_key=operation, owner_id=account.account_id, dataset_key=parent.dataset_key,
                   project_id=parent.project_id, fingerprint=fingerprint, testcase_count=len(remaining),
                   payload=payload, storage_keys=[key])

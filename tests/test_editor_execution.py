@@ -1,7 +1,9 @@
 import base64
 import copy
 import hashlib
+import io
 import json
+import struct
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
@@ -12,7 +14,7 @@ from test_editor_judging import database, short_lock_timeout, headers, client, E
 from app.models import now_utc
 from app.orm_models import EditorExecutionTaskRow as Task, JudgeNodeRow, JudgeJobRow, SubmissionRow, ContestRow, ContestDivisionRow, ProblemRow, TestcaseRow as CaseRow, TestcaseSetRow as CaseSetRow
 from app.services import editor_execution as execution
-from app.services.editor_protocol import FORMAT, PROTOCOL, KINDS, pack, validate_result
+from app.services.editor_protocol import FORMAT, PROTOCOL, KINDS, pack, validate_archive, validate_result
 from app.services.store import store
 from app.routers import admin
 from app.settings import settings
@@ -48,13 +50,13 @@ def create_direct(value, *, content=None):
 
 def test_slow_tool_upload_does_not_block_another_request(execution_db, short_lock_timeout, monkeypatch):
     entered, release = threading.Event(), threading.Event()
-    write = object_storage.write_bytes
+    write = object_storage.write_stream
     def slow_first(key, *args, **kwargs):
         if not entered.is_set():
             entered.set()
             assert release.wait(10)
         return write(key, *args, **kwargs)
-    monkeypatch.setattr(object_storage, 'write_bytes', slow_first)
+    monkeypatch.setattr(object_storage, 'write_stream', slow_first)
     n = ready_node()
     with ThreadPoolExecutor(max_workers=2) as pool:
         first = pool.submit(create_direct, payload())
@@ -71,10 +73,10 @@ def test_failed_tool_upload_resumes_same_task(execution_db, monkeypatch):
     value = payload()
     # Real retries reuse the original archive; repacking can change ZIP timestamps.
     content = pack(value)
-    write = object_storage.write_bytes
+    write = object_storage.write_stream
     def unavailable(*args, **kwargs):
         raise OSError('temporary storage outage')
-    monkeypatch.setattr(object_storage, 'write_bytes', unavailable)
+    monkeypatch.setattr(object_storage, 'write_stream', unavailable)
     with pytest.raises(AppError) as failure:
         create_direct(value, content=content)
     assert failure.value.status_code == 503
@@ -82,7 +84,7 @@ def test_failed_tool_upload_resumes_same_task(execution_db, monkeypatch):
         task = db.scalar(select(Task))
         assert task.status == 'uploading'
         task_id = task.task_id
-    monkeypatch.setattr(object_storage, 'write_bytes', write)
+    monkeypatch.setattr(object_storage, 'write_stream', write)
     result = create_direct(value, content=content)
     assert result['id'] == task_id and result['status'] == 'waiting'
     with execution_db() as db:
@@ -91,11 +93,11 @@ def test_failed_tool_upload_resumes_same_task(execution_db, monkeypatch):
 
 def test_tool_cancellation_during_upload_cannot_be_undone(execution_db, monkeypatch):
     value = payload()
-    write = object_storage.write_bytes
+    write = object_storage.write_stream
     def cancel_then_write(key, *args, **kwargs):
         execution.cancel_operation(EMAIL, value['operation_id'])
         return write(key, *args, **kwargs)
-    monkeypatch.setattr(object_storage, 'write_bytes', cancel_then_write)
+    monkeypatch.setattr(object_storage, 'write_stream', cancel_then_write)
     assert create_direct(value)['status'] == 'cancelled'
 
 
@@ -246,6 +248,15 @@ def test_policy_requires_service_master_and_at_least_one_scope(execution_db, mon
 def test_unsafe_file_paths_never_reach_a_node(filename):
     value=payload();value['files'][filename]=value['files'].pop('sum.py')
     with pytest.raises(ValueError):pack(value)
+
+
+def test_central_directory_count_is_verified_before_parsing_entries():
+    content = bytearray(pack(payload()))
+    end = content.rfind(b'PK\x05\x06')
+    struct.pack_into('<HH', content, end + 8, 1, 1)
+    with pytest.raises(ValueError, match='entry count'):
+        validate_archive(io.BytesIO(content))
+    assert validate_archive(io.BytesIO(pack(payload())))['format'] == FORMAT
 
 
 @pytest.mark.parametrize('field,value',[('cpu_ms',0),('cpu_ms',True),('memory_mb',4097),('wall_seconds',float('inf')),('command','python3'),('export_files',['../secret']),('image','arbitrary-image')])
