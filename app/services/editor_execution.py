@@ -1,6 +1,7 @@
 """Bounded Editor tool queue with administrator-owned routing and node leases."""
 import hashlib
 import hmac
+import io
 import json
 import threading
 import time
@@ -11,7 +12,7 @@ from app.database import SessionLocal
 from app.models import now_utc
 from app.orm_models import EditorExecutionTaskRow as Task, EditorJudgeRunRow, JudgeJobRow, JudgeNodeRow
 from app.services import editor_judging
-from app.services.editor_protocol import PROTOCOL, MAX_WIRE_BYTES, unpack, validate_result
+from app.services.editor_protocol import CHUNK_BYTES, PROTOCOL, MAX_WIRE_BYTES, validate_archive, validate_result
 from app.services.errors import AppError
 from app.services.node_credentials import valid_node_credential
 from app.services.storage import object_storage
@@ -57,10 +58,19 @@ def public(row, include_result=False):
 
 
 def create(email, content, fingerprint):
-    if hashlib.sha256(content).hexdigest() != fingerprint:
+    source = io.BytesIO(content) if isinstance(content, bytes) else content
+    source.seek(0, 2)
+    size = source.tell()
+    if size > MAX_WIRE_BYTES:
+        raise AppError(413, "editor_execution_large", "실행 자료가 전송 한도를 넘었습니다.")
+    source.seek(0)
+    digest = hashlib.sha256()
+    while chunk := source.read(CHUNK_BYTES):
+        digest.update(chunk)
+    if digest.hexdigest() != fingerprint:
         raise AppError(401, "editor_content_mismatch", "실행 자료의 무결성 검사가 실패했습니다.")
     try:
-        payload = unpack(content)
+        payload = validate_archive(source)
     except Exception as error:
         # Do not expose archive contents in errors.
         raise AppError(422, "editor_execution_invalid", "실행 자료의 형식·용량·무결성을 확인하세요.") from error
@@ -91,7 +101,8 @@ def create(email, content, fingerprint):
     # A durable, non-runnable reservation protects cancellation and quota
     # checks while object storage operates without an account lock or DB pool.
     try:
-        object_storage.write_bytes(key, content)
+        source.seek(0)
+        object_storage.write_stream(key, source, size, "application/zip")
     except Exception as error:
         raise AppError(503, "editor_execution_storage_busy", "실행 자료 저장을 완료하지 못했습니다. 같은 요청으로 다시 시도하세요.") from error
     with SessionLocal() as db:

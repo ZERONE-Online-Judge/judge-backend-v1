@@ -105,8 +105,7 @@ async def create_task(request: Request):
             if digest.hexdigest() != expected:
                 raise AppError(401, "editor_content_mismatch", "실행 자료가 서명한 내용과 다릅니다.")
             source.seek(0)
-            content = await run_in_threadpool(source.read)
-            return ok(request, await run_in_threadpool(execution.create, email, content, expected))
+            return ok(request, await run_in_threadpool(execution.create, email, source, expected))
     finally:
         _upload_slots.release()
 
